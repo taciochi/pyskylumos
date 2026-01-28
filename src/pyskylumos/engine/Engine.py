@@ -1,3 +1,5 @@
+"""Core simulation engine for sky polarization and sensor measurement."""
+
 from math import pi
 from typing import Dict, List, Tuple, Optional, Sequence
 
@@ -18,6 +20,8 @@ from pyskylumos.sensor.OpticalConjugator import OpticalConjugator
 
 
 class Engine:
+    """Orchestrates sky polarization simulation and sensor measurement."""
+
     __micro_polarizer: MicroPolarizer
     __sensor_chip: SensorChip
     __stokes_calculator: StokesCalculator
@@ -42,6 +46,21 @@ class Engine:
             wire_grid_orientations_slicing: Dict[int, SlicingPattern]
 
     ) -> None:
+        """Initialize the engine with optics, sensor, and polarizer parameters.
+
+        Args:
+            sensor_pixel_size_square_micrometers: Pixel size in square micrometers.
+            lens_conjugation_type: Lens conjugation model name.
+            number_pixels_vertical: Vertical pixel count of the sensor.
+            number_pixels_horizontal: Horizontal pixel count of the sensor.
+            lens_focal_length_micrometers: Lens focal length in micrometers.
+            tolerance: Maximum polarizer angular tolerance.
+            extinction_ratio: Polarizer extinction ratio.
+            pixel_saturation_ratio: Saturation ratio for sensor pixels.
+            adc_resolution: ADC resolution in bits.
+            signal_to_noise_ratio: Sensor signal-to-noise ratio.
+            wire_grid_orientations_slicing: Slicing pattern per polarizer orientation.
+        """
         self.__optical_conjugator = OpticalConjugator(
             lens_conjugation_type=lens_conjugation_type,
             number_pixels_vertical=number_pixels_vertical,
@@ -72,6 +91,16 @@ class Engine:
             y: NDArray[float32],
             z: NDArray[float32]
     ) -> Tuple[NDArray[float32], NDArray[float32]]:
+        """Convert cartesian coordinates to azimuth/elevation angles.
+
+        Args:
+            x: X-coordinate array.
+            y: Y-coordinate array.
+            z: Z-coordinate array.
+
+        Returns:
+            Tuple of azimuth and altitude arrays in radians.
+        """
         return arctan2(y, x), arctan2(z, sqrt(x ** 2 + y ** 2))
 
     @staticmethod
@@ -80,6 +109,16 @@ class Engine:
             altitudes: NDArray[float32],
             r: int = 1
     ) -> Tuple[NDArray[float32], NDArray[float32], NDArray[float32]]:
+        """Convert azimuth/elevation angles to cartesian coordinates.
+
+        Args:
+            azimuths: Azimuth angles in radians.
+            altitudes: Altitude angles in radians.
+            r: Radius for the conversion.
+
+        Returns:
+            Tuple of x, y, z coordinate arrays.
+        """
         return (
             r * cos(altitudes) * cos(azimuths),
             r * cos(altitudes) * sin(azimuths),
@@ -91,6 +130,15 @@ class Engine:
             aop: NDArray[float32],
             x: float
     ) -> NDArray[float32]:
+        """Wrap angle of polarization to the [-pi/2, pi/2] interval.
+
+        Args:
+            aop: Angle of polarization values in radians.
+            x: Rotation angle in degrees to apply before wrapping.
+
+        Returns:
+            Wrapped angle of polarization values.
+        """
         aop += deg2rad(x)
         aop = where(aop > pi / 2, aop - pi, aop)
         aop = where(aop < -pi / 2, aop + pi, aop)
@@ -101,6 +149,15 @@ class Engine:
             altitude_min_clip: Optional[float] = None,
             custom_lens_conjugation_type: Optional[callable] = None,
     ) -> Tuple[NDArray[float32], NDArray[float32]]:
+        """Return azimuth/altitude grid defined by the optical conjugator.
+
+        Args:
+            altitude_min_clip: Minimum altitude to keep (degrees).
+            custom_lens_conjugation_type: Optional custom conjugation function.
+
+        Returns:
+            Tuple of azimuth and altitude grids (degrees).
+        """
         return self.__optical_conjugator.get_azimuth_altitude(
             altitude_min_clip=altitude_min_clip,
             custom_lens_conjugation=custom_lens_conjugation_type
@@ -113,6 +170,17 @@ class Engine:
             azimuthal_tilt: float,
             tilt_angle: float
     ) -> Tuple[NDArray[float32], NDArray[float32]]:
+        """Rotate the sensor axes to apply tilt and return new angles.
+
+        Args:
+            azimuths: Input azimuth angles in degrees.
+            altitudes: Input altitude angles in degrees.
+            azimuthal_tilt: Azimuthal tilt angle in radians.
+            tilt_angle: Tilt angle in radians.
+
+        Returns:
+            Tuple of rotated azimuth and altitude angles (degrees).
+        """
         rotation_canonical: NDArray[float32] = array([
             [1.0, 0.0, 0.0],
             [0.0, cos(tilt_angle), -sin(tilt_angle)],
@@ -158,6 +226,15 @@ class Engine:
             azimuths: NDArray[float32],
             rotation_angle: Optional[float] = None
     ) -> NDArray[float32]:
+        """Rotate azimuths by a given angle in degrees.
+
+        Args:
+            azimuths: Input azimuth values in degrees.
+            rotation_angle: Angle in degrees to apply.
+
+        Returns:
+            Rotated azimuth values in degrees.
+        """
         if rotation_angle is None or rotation_angle == 0:
             return azimuths
 
@@ -174,6 +251,18 @@ class Engine:
             altitudes: NDArray[float32],
             observation_location: EarthLocation
     ) -> SkySimulator:
+        """Return the sky simulator implementation for a named sky model.
+
+        Args:
+            times: Observation times for each simulation step.
+            sky_model: Sky model name (e.g., RAYLEIGH, BERRY, PAN).
+            azimuths: Azimuth grid in degrees.
+            altitudes: Altitude grid in degrees.
+            observation_location: Location of the observer on Earth.
+
+        Returns:
+            Concrete SkySimulator implementation for the requested model.
+        """
         match sky_model.upper():
             case 'RAYLEIGH':
                 return Rayleigh(
@@ -212,6 +301,23 @@ class Engine:
             accuracy: Optional[bool] = False,
             sun_position: Optional[SkyCoord] = None,
     ) -> Tuple[Sequence[NDArray[float32]], List[str]]:
+        """Simulate sky polarization parameters for a chosen sky model.
+
+        Args:
+            sky_model: Sky model name (e.g., RAYLEIGH, BERRY, PAN).
+            observation_location: Location of the observer on Earth.
+            times: Observation times for each simulation step.
+            cie_sky_type: CIE sky type index for radiance model.
+            altitudes: Altitude grid in degrees.
+            azimuths: Azimuth grid in degrees.
+            altitude_min_clip: Minimum altitude to keep (degrees).
+            azimuth_rotation_angle: Optional rotation applied to AoP (degrees).
+            accuracy: Whether to use high-accuracy ephemeris for sun position.
+            sun_position: Optional explicit sun position to use.
+
+        Returns:
+            Tuple containing simulated sky parameters and their labels.
+        """
         if altitude_min_clip is not None and not isinstance(altitude_min_clip, (int, float)):
             raise TypeError('altitude_min_clip must be a float or None.')
         if azimuth_rotation_angle is not None and not isinstance(azimuth_rotation_angle, (int, float)):
@@ -251,7 +357,16 @@ class Engine:
             angle_of_polarization: NDArray[float32],
             radiance: NDArray[float32]
     ) -> Dict[str, NDArray[float32]]:
+        """Simulate sensor measurements from polarization state and radiance.
 
+        Args:
+            degree_of_polarization: Input degree of polarization values.
+            angle_of_polarization: Input angle of polarization values (radians).
+            radiance: Input radiance values.
+
+        Returns:
+            Dictionary containing simulated degree and angle of polarization.
+        """
         iop: NDArray[NDArray[float32]] = self.__micro_polarizer.get_intensity_on_pixel(
             degree_of_polarization=degree_of_polarization,
             angle_of_polarization=angle_of_polarization,

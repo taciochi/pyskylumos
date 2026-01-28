@@ -1,3 +1,5 @@
+"""Sensor module exports for the pyskylumos package."""
+
 from typing import List
 
 from .SensorChip import SensorChip

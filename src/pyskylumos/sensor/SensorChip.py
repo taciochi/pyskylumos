@@ -1,9 +1,13 @@
+"""Sensor chip model for quantization and noise effects."""
+
 from numpy.random import randn
 from numpy.typing import NDArray
 from numpy import float32, nanmax, minimum, floor, nan_to_num, isnan
 
 
 class SensorChip:
+    """Simulate sensor quantization with noise and saturation effects."""
+
     __adc_resolution: float
     __signal_to_noise_ratio: float
     __pixel_saturation_ratio: float
@@ -14,6 +18,13 @@ class SensorChip:
             adc_resolution: float,
             signal_to_noise_ratio: float,
     ) -> None:
+        """Initialize the sensor chip configuration.
+
+        Args:
+            pixel_saturation_ratio: Ratio of max intensity used before saturation.
+            adc_resolution: ADC resolution in bits.
+            signal_to_noise_ratio: Desired signal-to-noise ratio.
+        """
         self.__adc_resolution = adc_resolution
         self.__pixel_saturation_ratio = pixel_saturation_ratio
         self.__signal_to_noise_ratio = signal_to_noise_ratio
@@ -23,6 +34,14 @@ class SensorChip:
             intensity_on_pixel: NDArray[NDArray[float32]],
             # maximum_relative_radiance: float
     ) -> NDArray[NDArray[float32]]:
+        """Convert intensity on pixels into quantized sensor readings.
+
+        Args:
+            intensity_on_pixel: Incoming intensity for each pixel.
+
+        Returns:
+            Quantized intensity values in ADC bits.
+        """
         mask: NDArray[bool] = isnan(intensity_on_pixel)
         white_noise: NDArray[NDArray[float32]] = (
                 (

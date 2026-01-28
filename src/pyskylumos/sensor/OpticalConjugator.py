@@ -1,3 +1,5 @@
+"""Optical conjugation model for mapping sensor pixels to sky coordinates."""
+
 from typing import Tuple, Optional
 
 from numpy.typing import NDArray
@@ -5,6 +7,8 @@ from numpy import linspace, ones, angle, arctan, pi, absolute, arcsin, rad2deg, 
 
 
 class OpticalConjugator:
+    """Convert sensor pixel positions into azimuth/altitude coordinates."""
+
     __lens_conjugation_type: str
     __number_pixels_vertical: int
     __number_pixels_horizontal: int
@@ -22,6 +26,15 @@ class OpticalConjugator:
             lens_focal_length_micrometers: float,
             sensor_pixel_size_square_micrometers: float
     ) -> None:
+        """Initialize optical conjugation parameters and caches.
+
+        Args:
+            lens_conjugation_type: Projection model name.
+            number_pixels_vertical: Vertical pixel count of the sensor.
+            number_pixels_horizontal: Horizontal pixel count of the sensor.
+            lens_focal_length_micrometers: Lens focal length in micrometers.
+            sensor_pixel_size_square_micrometers: Pixel size in square micrometers.
+        """
         self.__lens_conjugation_type = lens_conjugation_type
         self.__number_pixels_vertical = number_pixels_vertical
         self.__number_pixels_horizontal = number_pixels_horizontal
@@ -33,16 +46,31 @@ class OpticalConjugator:
 
     @property
     def lens_conjugation_type(self) -> str:
+        """Return the configured lens conjugation type.
+
+        Returns:
+            Lens conjugation model name.
+        """
         return self.__lens_conjugation_type
 
     @property
     def sensor_pixel_size_square_micrometers(self) -> float:
+        """Return the sensor pixel size in square micrometers.
+
+        Returns:
+            Pixel size in square micrometers.
+        """
         return self.__sensor_pixel_size_square_micrometers
 
     # noinspection PyTypeChecker
     def __get_complex_sensor_plane(
             self,
     ) -> NDArray[complex]:
+        """Return the complex sensor plane for the pixel grid.
+
+        Returns:
+            Complex-valued grid representing sensor coordinates.
+        """
         if self.__complex_sensor_plane_cache is not None:
             return self.__complex_sensor_plane_cache
 
@@ -73,6 +101,15 @@ class OpticalConjugator:
             complex_sensor_plane: NDArray[complex],
             custom_lens_conjugation: Optional[callable]
     ) -> NDArray[float32]:
+        """Apply the configured lens conjugation to sensor plane coordinates.
+
+        Args:
+            complex_sensor_plane: Complex sensor plane coordinates.
+            custom_lens_conjugation: Optional custom conjugation function.
+
+        Returns:
+            Altitude angles (radians) for each sensor coordinate.
+        """
         half_pi: float = pi / 2
         match self.__lens_conjugation_type:
             case 'thin':
@@ -108,6 +145,15 @@ class OpticalConjugator:
             altitude_min_clip: Optional[float],
             custom_lens_conjugation: Optional[callable] = None,
     ) -> Tuple[NDArray[float32], NDArray[float32]]:
+        """Return azimuth and altitude angles for the sensor pixel grid.
+
+        Args:
+            altitude_min_clip: Minimum altitude to keep (degrees).
+            custom_lens_conjugation: Optional custom conjugation function.
+
+        Returns:
+            Tuple of azimuth and altitude grids (degrees).
+        """
         if self.__lens_conjugation_type != 'custom' and self.__azimuth_cache is not None and self.__altitude_cache is not None:
             azimuth = self.__azimuth_cache
             altitude = self.__altitude_cache

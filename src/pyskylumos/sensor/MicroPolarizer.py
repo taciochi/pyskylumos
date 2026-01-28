@@ -1,3 +1,5 @@
+"""Micro-polarizer array model for wire-grid orientation effects."""
+
 from typing import Dict, Optional, Tuple
 
 from numpy.typing import NDArray
@@ -8,6 +10,8 @@ from pyskylumos.sensor.SlicingPattern import SlicingPattern
 
 
 class MicroPolarizer:
+    """Simulate intensity response of a micro-polarizer array."""
+
     __extinction_ratio: float
     __tolerance: float
     __wire_grid_orientations_slicing: Dict[int, SlicingPattern]
@@ -24,11 +28,13 @@ class MicroPolarizer:
             wire_grid_orientations_slicing: Dict[int, SlicingPattern],
             random_seed: Optional[int] = None
     ) -> None:
-        """
-        :param extinction_ratio: The polarizer's extinction ratio (e.g., 0.99).
-        :param tolerance: Max random angular offset (in radians or degrees, see usage) for manufacturing defects.
-        :param wire_grid_orientations_slicing: Dictionary specifying which rows/cols correspond to each orientation angle.
-        :param random_seed: Seed for deterministic defect generation.
+        """Initialize the micro-polarizer with tolerances and slicing patterns.
+
+        Args:
+            extinction_ratio: Polarizer extinction ratio (e.g., 0.99).
+            tolerance: Maximum angular offset for manufacturing defects.
+            wire_grid_orientations_slicing: Slicing pattern per orientation angle.
+            random_seed: Optional seed for deterministic defect generation.
         """
         self.__tolerance = tolerance
         self.__extinction_ratio = extinction_ratio
@@ -44,6 +50,15 @@ class MicroPolarizer:
             row_dim: int,
             col_dim: int
     ) -> NDArray[float32]:
+        """Return the pixel-angle map for the given sensor dimensions.
+
+        Args:
+            row_dim: Number of pixel rows.
+            col_dim: Number of pixel columns.
+
+        Returns:
+            Angle map containing the wire-grid orientation per pixel.
+        """
         if self.__angle_map_cache is not None and self.__angle_map_shape == (row_dim, col_dim):
             return self.__angle_map_cache
 
@@ -67,6 +82,15 @@ class MicroPolarizer:
             row_dim: int,
             col_dim: int
     ) -> NDArray[float32]:
+        """Return random angular defects for the given sensor dimensions.
+
+        Args:
+            row_dim: Number of pixel rows.
+            col_dim: Number of pixel columns.
+
+        Returns:
+            Defect map in radians for each pixel.
+        """
         if self.__tolerance == 0:
             return zeros((row_dim, col_dim), dtype=float32)
 
@@ -85,6 +109,16 @@ class MicroPolarizer:
             angle_of_polarization: NDArray[NDArray[float32]],
             radiance: NDArray[NDArray[float32]]
     ) -> NDArray[float32]:
+        """Compute intensity reaching each pixel after polarizer filtering.
+
+        Args:
+            degree_of_polarization: Degree of polarization values.
+            angle_of_polarization: Angle of polarization values (radians).
+            radiance: Radiance values per pixel.
+
+        Returns:
+            Intensity on each pixel after polarizer filtering.
+        """
         _, row_dim, col_dim = radiance.shape
         angle_map = self.__get_angle_map(row_dim=row_dim, col_dim=col_dim)
         defects = self.__get_defects(row_dim=row_dim, col_dim=col_dim)
