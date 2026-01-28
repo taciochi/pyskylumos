@@ -1,7 +1,7 @@
 from typing import Dict, Tuple
 
 from numpy.typing import NDArray
-from numpy import float32, sqrt, arctan2
+from numpy import float32, sqrt, arctan2, divide, full_like, nan
 
 from pyskylumos.sensor.SlicingPattern import SlicingPattern
 
@@ -62,7 +62,8 @@ class StokesCalculator:
             s1: NDArray[NDArray[float32]],
             s2: NDArray[NDArray[float32]]
     ) -> NDArray[NDArray[float32]]:
-        return sqrt(s1 ** 2 + s2 ** 2) / s0
+        numerator = sqrt(s1 ** 2 + s2 ** 2)
+        return divide(numerator, s0, out=full_like(s0, nan), where=s0 != 0)
 
     @staticmethod
     def __compute_angle_of_polarization(

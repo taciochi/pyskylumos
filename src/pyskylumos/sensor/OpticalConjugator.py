@@ -10,6 +10,9 @@ class OpticalConjugator:
     __number_pixels_horizontal: int
     __lens_focal_length_micrometers: float
     __sensor_pixel_size_square_micrometers: float
+    __complex_sensor_plane_cache: Optional[NDArray[complex]]
+    __azimuth_cache: Optional[NDArray[float32]]
+    __altitude_cache: Optional[NDArray[float32]]
 
     def __init__(
             self,
@@ -24,6 +27,9 @@ class OpticalConjugator:
         self.__number_pixels_horizontal = number_pixels_horizontal
         self.__lens_focal_length_micrometers = lens_focal_length_micrometers
         self.__sensor_pixel_size_square_micrometers = sensor_pixel_size_square_micrometers
+        self.__complex_sensor_plane_cache = None
+        self.__azimuth_cache = None
+        self.__altitude_cache = None
 
     @property
     def lens_conjugation_type(self) -> str:
@@ -37,6 +43,9 @@ class OpticalConjugator:
     def __get_complex_sensor_plane(
             self,
     ) -> NDArray[complex]:
+        if self.__complex_sensor_plane_cache is not None:
+            return self.__complex_sensor_plane_cache
+
         start_x: float = (self.__number_pixels_horizontal - 1) / 2
         stop_x: float = -start_x
         x_pixels: NDArray[float32] = linspace(start=start_x, stop=stop_x,
@@ -56,6 +65,7 @@ class OpticalConjugator:
         imaginary: NDArray[float32] = ones(shape=(1, self.__number_pixels_horizontal)) * y_micrometers.T[:, None]
         complex_plane: NDArray[complex] = real + 1j * imaginary
 
+        self.__complex_sensor_plane_cache = complex_plane
         return complex_plane
 
     def __apply_conjugation(
@@ -84,28 +94,38 @@ class OpticalConjugator:
                     absolute(complex_sensor_plane) / self.__lens_focal_length_micrometers
                 )
             case 'custom':
+                if custom_lens_conjugation is None:
+                    raise ValueError('Custom lens conjugation type requires a custom_lens_conjugation function.')
                 return custom_lens_conjugation(
                     complex_sensor_plane=complex_sensor_plane,
                     lens_focal_length_micrometers=self.__lens_focal_length_micrometers
                 )
             case _:
-                exit('Invalid lens projection type')
+                raise ValueError('Invalid lens projection type')
 
     def get_azimuth_altitude(
             self,
             altitude_min_clip: Optional[float],
             custom_lens_conjugation: Optional[callable] = None,
     ) -> Tuple[NDArray[float32], NDArray[float32]]:
-        complex_sensor_plane: NDArray[complex] = self.__get_complex_sensor_plane()
-        azimuth: NDArray[float32] = angle(z=complex_sensor_plane, deg=True)
-        altitude: NDArray[float32] = rad2deg(
-            self.__apply_conjugation(
-                complex_sensor_plane=complex_sensor_plane,
-                custom_lens_conjugation=custom_lens_conjugation
+        if self.__lens_conjugation_type != 'custom' and self.__azimuth_cache is not None and self.__altitude_cache is not None:
+            azimuth = self.__azimuth_cache
+            altitude = self.__altitude_cache
+        else:
+            complex_sensor_plane: NDArray[complex] = self.__get_complex_sensor_plane()
+            azimuth = flip(angle(z=complex_sensor_plane, deg=True), axis=1)
+            altitude = rad2deg(
+                self.__apply_conjugation(
+                    complex_sensor_plane=complex_sensor_plane,
+                    custom_lens_conjugation=custom_lens_conjugation
+                )
             )
-        )
+            if self.__lens_conjugation_type != 'custom':
+                self.__azimuth_cache = azimuth
+                self.__altitude_cache = altitude
 
         if altitude_min_clip is not None:
+            altitude = altitude.copy()
             altitude = altitude.clip(min=altitude_min_clip)
 
-        return flip(azimuth, axis=1), altitude
+        return azimuth, altitude
