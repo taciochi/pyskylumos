@@ -3,7 +3,7 @@ from typing import Dict, List, Tuple, Optional, Sequence
 
 from astropy.time import Time
 from numpy.typing import NDArray
-from astropy.coordinates import EarthLocation
+from astropy.coordinates import EarthLocation, SkyCoord
 from numpy import float32, arctan2, sqrt, cos, sin, array, where, deg2rad, rad2deg
 
 from pyskylumos.sky_models.Pan import Pan
@@ -209,12 +209,16 @@ class Engine:
             azimuths: NDArray[float32],
             altitude_min_clip: Optional[float] = None,
             azimuth_rotation_angle: Optional[float] = None,
-            accuracy: Optional[bool] = False
+            accuracy: Optional[bool] = False,
+            sun_position: Optional[SkyCoord] = None,
     ) -> Tuple[Sequence[NDArray[float32]], List[str]]:
+        """Simulate sky polarization parameters for a given sky model."""
         if altitude_min_clip is not None and not isinstance(altitude_min_clip, (int, float)):
             raise TypeError('altitude_min_clip must be a float or None.')
         if azimuth_rotation_angle is not None and not isinstance(azimuth_rotation_angle, (int, float)):
             raise TypeError('azimuth_rotation_angle must be a float or None.')
+        if sun_position is not None and not isinstance(sun_position, SkyCoord):
+            raise TypeError('sun_position must be an astropy.coordinates.SkyCoord or None.')
 
         sky_simulator: SkySimulator = self.__get_sky_simulator(
             times=times,
@@ -228,6 +232,8 @@ class Engine:
             cie_sky_type=cie_sky_type,
             altitude_min_clip=altitude_min_clip,
             accuracy=accuracy,
+            # Optional sun override for deterministic or external ephemerides.
+            sun_position=sun_position,
         )
 
         if azimuth_rotation_angle is not None:
