@@ -9,7 +9,7 @@ measurement. Angles are in degrees unless otherwise stated, while AoP values are
 
 ```python
 from astropy.time import Time
-from astropy.coordinates import EarthLocation
+from astropy.coordinates import EarthLocation, SkyCoord, AltAz
 
 from pyskylumos.engine import Engine
 from pyskylumos.sensor import SlicingPattern
@@ -45,6 +45,8 @@ sky_parameters, names = engine.simulate_sky_polarization(
     cie_sky_type=4,
     altitudes=altitudes,
     azimuths=azimuths,
+    # Optional: override the sun position (e.g., from an external ephemeris).
+    # sun_position=SkyCoord(alt=45, az=120, unit="deg", frame=AltAz(obstime=Time("2024-07-01T12:00:00"), location=observation_location)),
 )
 
 sky = dict(zip(names, sky_parameters))

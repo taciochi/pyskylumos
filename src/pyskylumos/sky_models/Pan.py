@@ -124,9 +124,10 @@ class Pan(SkySimulator):
             self,
             cie_sky_type: int,
             altitude_min_clip: float | None = None,
-            accuracy: bool = False
+            accuracy: bool = False,
+            sun_position: SkyCoord | None = None,
     ) -> List[NDArray[float32]]:
-        sun_position: SkyCoord = self._get_sun(accuracy=accuracy)
+        sun_position = self._get_sun(accuracy=accuracy, sun_position=sun_position)
         anti_sun_position: SkyCoord = sun_position.directional_offset_by(
             position_angle=0 * deg,
             separation=180 * deg
