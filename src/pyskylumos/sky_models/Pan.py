@@ -1,3 +1,5 @@
+"""Pan sky polarization model implementation."""
+
 from typing import List
 
 from astropy.time import Time
@@ -10,6 +12,8 @@ from pyskylumos.sky_models.SkySimulator import SkySimulator
 
 
 class Pan(SkySimulator):
+    """Simulate sky polarization using the Pan model."""
+
     sky_map: SkyCoord
     __PARAMETERS_SIMULATED: List[str] = [
         'degree of polarization',
@@ -43,6 +47,14 @@ class Pan(SkySimulator):
             azimuths: NDArray[float32],
             altitudes: NDArray[float32]
     ) -> None:
+        """Initialize the Pan simulator with observation geometry.
+
+        Args:
+            times: Observation times for each simulation step.
+            observation_location: Location of the observer on Earth.
+            azimuths: Grid of azimuths (degrees) for sky sampling.
+            altitudes: Grid of altitudes (degrees) for sky sampling.
+        """
         self._sky_map = SkyCoord(
             alt=altitudes * deg, az=azimuths * deg,
             frame=AltAz(
@@ -53,14 +65,29 @@ class Pan(SkySimulator):
 
     @property
     def parameters_simulated(self) -> List[str]:
+        """Return the list of parameters produced by the simulation.
+
+        Returns:
+            Names of sky parameters simulated by this model.
+        """
         return self.__PARAMETERS_SIMULATED
 
     @property
     def sky_map(self) -> SkyCoord:
+        """Return the current sky map coordinates.
+
+        Returns:
+            The current sky map as an astropy SkyCoord.
+        """
         return self._sky_map
 
     @sky_map.setter
     def sky_map(self, new_sky_map: SkyCoord) -> None:
+        """Update the sky map coordinates.
+
+        Args:
+            new_sky_map: New sky coordinate grid.
+        """
         self._sky_map = new_sky_map
 
     @staticmethod
@@ -72,6 +99,19 @@ class Pan(SkySimulator):
             angle_between_sun_babinet: NDArray[float32],
             angle_between_sun_brewster: NDArray[float32]
     ) -> NDArray[complex]:
+        """Compute the complex omega field used by the Pan model.
+
+        Args:
+            sun_zenith_angle: Sun zenith angle in radians.
+            sun_azimuth: Sun azimuth in radians.
+            observed_point_zenith: Observed point zenith in radians.
+            observed_point_azimuth: Observed point azimuth in radians.
+            angle_between_sun_babinet: Angle between sun and Babinet point in radians.
+            angle_between_sun_brewster: Angle between sun and Brewster point in radians.
+
+        Returns:
+            Complex omega field for the Pan model.
+        """
         observed_point_projection: NDArray[complex] = (
                 tan(observed_point_zenith / 2) *
                 exp(observed_point_azimuth * 1j)
@@ -112,10 +152,27 @@ class Pan(SkySimulator):
 
     @staticmethod
     def __get_dop(omega: NDArray[complex]) -> NDArray[float32]:
+        """Compute degree of polarization from the omega field.
+
+        Args:
+            omega: Complex omega field.
+
+        Returns:
+            Degree of polarization for each sampled point.
+        """
         return absolute(omega) / (2 - absolute(omega))
 
     @staticmethod
     def __get_aop(omega: NDArray[complex], sun_azimuth: NDArray[float32]) -> NDArray[float32]:
+        """Compute angle of polarization from the omega field.
+
+        Args:
+            omega: Complex omega field.
+            sun_azimuth: Sun azimuth in radians.
+
+        Returns:
+            Angle of polarization for each sampled point.
+        """
         return 0.5 * angle(
             z=(omega * exp(-2j * sun_azimuth))
         )
@@ -127,6 +184,18 @@ class Pan(SkySimulator):
             accuracy: bool = False,
             sun_position: SkyCoord | None = None,
     ) -> List[NDArray[float32]]:
+        """Simulate Pan sky polarization for the provided configuration.
+
+        Args:
+            cie_sky_type: CIE sky type index for radiance model.
+            altitude_min_clip: Minimum altitude (degrees) to keep; lower values masked.
+            accuracy: Whether to use high-accuracy ephemeris for sun position.
+            sun_position: Optional explicit sun position to use.
+
+        Returns:
+            List of arrays for polarization metrics, radiance, scattering angle,
+            and singularity points relative to sun and anti-sun.
+        """
         sun_position = self._get_sun(accuracy=accuracy, sun_position=sun_position)
         anti_sun_position: SkyCoord = sun_position.directional_offset_by(
             position_angle=0 * deg,

@@ -1,3 +1,5 @@
+"""Rayleigh sky polarization model implementation."""
+
 from typing import List
 
 from astropy.units import deg
@@ -10,6 +12,8 @@ from pyskylumos.sky_models.SkySimulator import SkySimulator
 
 
 class Rayleigh(SkySimulator):
+    """Simulate sky polarization using the Rayleigh scattering model."""
+
     sky_map: SkyCoord
     __PARAMETERS_SIMULATED: List[str] = [
         'degree of polarization',
@@ -29,6 +33,14 @@ class Rayleigh(SkySimulator):
             altitudes: NDArray[float32],
             azimuths: NDArray[float32]
     ) -> None:
+        """Initialize the Rayleigh simulator with observation geometry.
+
+        Args:
+            times: Observation times for each simulation step.
+            observation_location: Location of the observer on Earth.
+            altitudes: Grid of altitudes (degrees) for sky sampling.
+            azimuths: Grid of azimuths (degrees) for sky sampling.
+        """
         self._sky_map = SkyCoord(
             alt=altitudes * deg,
             az=azimuths * deg,
@@ -40,18 +52,41 @@ class Rayleigh(SkySimulator):
 
     @property
     def parameters_simulated(self) -> List[str]:
+        """Return the list of parameters produced by the simulation.
+
+        Returns:
+            Names of sky parameters simulated by this model.
+        """
         return self.__PARAMETERS_SIMULATED
 
     @property
     def sky_map(self) -> SkyCoord:
+        """Return the current sky map coordinates.
+
+        Returns:
+            The current sky map as an astropy SkyCoord.
+        """
         return self._sky_map
 
     @sky_map.setter
     def sky_map(self, new_sky_map: SkyCoord) -> None:
+        """Update the sky map coordinates.
+
+        Args:
+            new_sky_map: New sky coordinate grid.
+        """
         self._sky_map = new_sky_map
 
     @staticmethod
     def __get_dop(scattering_angle: NDArray[NDArray[float32]]) -> NDArray[float32]:
+        """Compute degree of polarization from the scattering angle.
+
+        Args:
+            scattering_angle: Scattering angle between sun and observation point.
+
+        Returns:
+            Degree of polarization for each sampled point.
+        """
         return (
                 sin(scattering_angle) ** 2 / (1 + cos(scattering_angle) ** 2)
         ).astype(float32)
@@ -63,6 +98,17 @@ class Rayleigh(SkySimulator):
             azimuthal_difference: NDArray[float32],
             observed_particle_azimuth: NDArray[float32]
     ) -> NDArray[float32]:
+        """Compute angle of polarization from solar and observation geometry.
+
+        Args:
+            observed_point_altitude: Altitude of the observed point in radians.
+            solar_altitude: Solar altitude in radians.
+            azimuthal_difference: Difference between observed and solar azimuths in radians.
+            observed_particle_azimuth: Observed particle azimuth in radians.
+
+        Returns:
+            Angle of polarization for each sampled point.
+        """
         return arctan(
             tan(
                 arctan(
@@ -83,6 +129,18 @@ class Rayleigh(SkySimulator):
             accuracy: bool = False,
             sun_position: SkyCoord | None = None,
     ) -> List[NDArray[float32]]:
+        """Simulate Rayleigh sky polarization for the provided configuration.
+
+        Args:
+            cie_sky_type: CIE sky type index for radiance model.
+            altitude_min_clip: Minimum altitude (degrees) to keep; lower values masked.
+            accuracy: Whether to use high-accuracy ephemeris for sun position.
+            sun_position: Optional explicit sun position to use.
+
+        Returns:
+            List of arrays for degree/angle of polarization, radiance, scattering angle,
+            and sun/anti-sun azimuth/elevation values.
+        """
         sun_position = self._get_sun(accuracy=accuracy, sun_position=sun_position)
         anti_sun_position: SkyCoord = sun_position.directional_offset_by(
             position_angle=0 * deg,

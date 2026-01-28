@@ -1,3 +1,5 @@
+"""Abstract base class for sky polarization simulators."""
+
 from typing import Dict, List
 from abc import ABC, abstractmethod
 
@@ -7,6 +9,8 @@ from astropy.coordinates import SkyCoord, AltAz, get_sun, get_body
 
 
 class SkySimulator(ABC):
+    """Base class providing shared sky simulation utilities."""
+
     __cie_sky_types: Dict[int, Dict[str, float]] = {
         1: {
             'A': 4.0,
@@ -118,16 +122,31 @@ class SkySimulator(ABC):
     @property
     @abstractmethod
     def parameters_simulated(self) -> List[str]:
+        """Return the list of parameter names produced by the simulator.
+
+        Returns:
+            Names of sky parameters simulated by this model.
+        """
         ...
 
     @property
     @abstractmethod
     def sky_map(self) -> SkyCoord:
+        """Return the current sky map coordinates.
+
+        Returns:
+            The current sky map as an astropy SkyCoord.
+        """
         ...
 
     @sky_map.setter
     @abstractmethod
     def sky_map(self, new_sky_map: SkyCoord) -> None:
+        """Update the sky map coordinates.
+
+        Args:
+            new_sky_map: New sky coordinate grid.
+        """
         ...
 
     @abstractmethod
@@ -138,6 +157,17 @@ class SkySimulator(ABC):
             accuracy: bool = False,
             sun_position: SkyCoord | None = None,
     ) -> List[NDArray[float32]]:
+        """Simulate sky polarization for the given sky model.
+
+        Args:
+            cie_sky_type: CIE sky type index for radiance model.
+            altitude_min_clip: Minimum altitude (degrees) to keep; lower values masked.
+            accuracy: Whether to use high-accuracy ephemeris for sun position.
+            sun_position: Optional explicit sun position to use.
+
+        Returns:
+            List of arrays for the simulated sky parameters.
+        """
         ...
 
     def _get_sun(
@@ -145,6 +175,15 @@ class SkySimulator(ABC):
             accuracy: bool = False,
             sun_position: SkyCoord | None = None
     ) -> SkyCoord:
+        """Return the sun position for the simulation frame.
+
+        Args:
+            accuracy: Whether to use the JPL ephemeris for higher accuracy.
+            sun_position: Optional explicit sun position to use.
+
+        Returns:
+            Sun position in the simulator's AltAz frame.
+        """
         obstime = self.sky_map.obstime[..., 0, 0]
         frame = AltAz(obstime=obstime, location=self.sky_map.location)
 
@@ -169,6 +208,17 @@ class SkySimulator(ABC):
             sun_zenith_angle: NDArray[float32],
             scattering_angle: NDArray[float32]
     ) -> NDArray[float32]:
+        """Compute CIE sky radiance for the provided geometry.
+
+        Args:
+            cie_sky_type: CIE sky type index for radiance model.
+            observed_point_zenith_angle: Zenith angle of the observed point (radians).
+            sun_zenith_angle: Zenith angle of the sun (radians).
+            scattering_angle: Scattering angle between sun and observation point (radians).
+
+        Returns:
+            Radiance value for each sampled point.
+        """
         radiance_parameters: Dict[str, float] = cls.__cie_sky_types[cie_sky_type]
         half_pi: float = pi / 2
 
