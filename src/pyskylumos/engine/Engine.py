@@ -158,7 +158,7 @@ class Engine:
             azimuths: NDArray[float32],
             rotation_angle: Optional[float] = None
     ) -> NDArray[float32]:
-        if not rotation_angle:
+        if rotation_angle is None or rotation_angle == 0:
             return azimuths
 
         azimuths += rotation_angle
@@ -211,6 +211,11 @@ class Engine:
             azimuth_rotation_angle: Optional[float] = None,
             accuracy: Optional[bool] = False
     ) -> Tuple[Sequence[NDArray[float32]], List[str]]:
+        if altitude_min_clip is not None and not isinstance(altitude_min_clip, (int, float)):
+            raise TypeError('altitude_min_clip must be a float or None.')
+        if azimuth_rotation_angle is not None and not isinstance(azimuth_rotation_angle, (int, float)):
+            raise TypeError('azimuth_rotation_angle must be a float or None.')
+
         sky_simulator: SkySimulator = self.__get_sky_simulator(
             times=times,
             azimuths=azimuths,
@@ -225,10 +230,11 @@ class Engine:
             accuracy=accuracy,
         )
 
-        sky_polarization_parameters[1] = self.__wrap_aop(
-            aop=sky_polarization_parameters[1],
-            x=-1 * azimuth_rotation_angle,
-        )
+        if azimuth_rotation_angle is not None:
+            sky_polarization_parameters[1] = self.__wrap_aop(
+                aop=sky_polarization_parameters[1],
+                x=-1 * azimuth_rotation_angle,
+            )
 
         return (
             sky_polarization_parameters,
