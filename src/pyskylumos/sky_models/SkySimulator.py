@@ -136,12 +136,25 @@ class SkySimulator(ABC):
             cie_sky_type: int,
             altitude_min_clip: float | None = None,
             accuracy: bool = False,
+            sun_position: SkyCoord | None = None,
     ) -> List[NDArray[float32]]:
         ...
 
-    def _get_sun(self, accuracy: bool = False) -> SkyCoord:
+    def _get_sun(
+            self,
+            accuracy: bool = False,
+            sun_position: SkyCoord | None = None
+    ) -> SkyCoord:
         obstime = self.sky_map.obstime[..., 0, 0]
         frame = AltAz(obstime=obstime, location=self.sky_map.location)
+
+        if sun_position is not None:
+            if not isinstance(sun_position, SkyCoord):
+                raise TypeError('sun_position must be an astropy.coordinates.SkyCoord or None.')
+            sun_position = sun_position.transform_to(frame)
+            if sun_position.shape == obstime.shape:
+                return sun_position[..., None, None]
+            return sun_position
 
         if accuracy:
             return get_body("sun", obstime, ephemeris="jpl").transform_to(frame)[..., None, None]
@@ -191,5 +204,3 @@ class SkySimulator(ABC):
                         )
                 )
         )
-
-
