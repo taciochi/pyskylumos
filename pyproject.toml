@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyskylumos"
-version = "0.0.5"
+version = "0.0.6"
 authors = [
     {name="Teodor-Avram Ciochirca", email="sgtcioch@liverpool.ac.uk"},
     {name="Daniel John Chadwick", email="sgdjohnc@liverpool.ac.uk"},
