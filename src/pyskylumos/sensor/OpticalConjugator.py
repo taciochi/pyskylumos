@@ -3,7 +3,7 @@
 from typing import Tuple, Optional
 
 from numpy.typing import NDArray
-from numpy import linspace, ones, angle, arctan, pi, absolute, arcsin, rad2deg, float32, flip
+from numpy import linspace, ones, angle, arctan, pi, absolute, arcsin, rad2deg, float32
 
 
 class OpticalConjugator:
@@ -74,7 +74,7 @@ class OpticalConjugator:
         if self.__complex_sensor_plane_cache is not None:
             return self.__complex_sensor_plane_cache
 
-        start_x: float = (self.__number_pixels_horizontal - 1) / 2
+        start_x: float = -((self.__number_pixels_horizontal - 1) / 2)
         stop_x: float = -start_x
         x_pixels: NDArray[float32] = linspace(start=start_x, stop=stop_x,
                                               num=self.__number_pixels_horizontal).astype(float32)
@@ -159,7 +159,7 @@ class OpticalConjugator:
             altitude = self.__altitude_cache
         else:
             complex_sensor_plane: NDArray[complex] = self.__get_complex_sensor_plane()
-            azimuth = flip(angle(z=complex_sensor_plane, deg=True), axis=1)
+            azimuth = angle(z=complex_sensor_plane, deg=True)
             altitude = rad2deg(
                 self.__apply_conjugation(
                     complex_sensor_plane=complex_sensor_plane,
