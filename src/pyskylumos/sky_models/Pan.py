@@ -120,16 +120,16 @@ class Pan(SkySimulator):
         brewster_projection: NDArray[complex] = (
                 exp(sun_azimuth * 1j) *
                 (
-                        (tan(sun_zenith_angle / 2) + tan(angle_between_sun_brewster / 4)) /
-                        (1 - tan(sun_zenith_angle / 2) * tan(angle_between_sun_brewster / 4))
+                        (tan(sun_zenith_angle / 2) + tan(angle_between_sun_brewster / 2)) /
+                        (1 - tan(sun_zenith_angle / 2) * tan(angle_between_sun_brewster / 2))
                 )
         )
 
         babinet_projection: NDArray[complex] = (
                 exp(sun_azimuth * 1j) *
                 (
-                        (tan(sun_zenith_angle / 2) - tan(angle_between_sun_babinet / 4)) /
-                        (1 + tan(sun_zenith_angle / 2) * tan(angle_between_sun_babinet / 4))
+                        (tan(sun_zenith_angle / 2) - tan(angle_between_sun_babinet / 2)) /
+                        (1 + tan(sun_zenith_angle / 2) * tan(angle_between_sun_babinet / 2))
                 )
         )
 
