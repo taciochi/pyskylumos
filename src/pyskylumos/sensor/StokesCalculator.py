@@ -121,13 +121,19 @@ class StokesCalculator:
             self,
             bits_intensity: NDArray[NDArray[float32]]
     ) -> Tuple[NDArray[float32], NDArray[float32]]:
-        """Compute degree and angle of polarization from sensor readings.
+        """Compute degree of polarization from sensor readings.
+
+        Note:
+            Currently returns only the degree of polarization array, despite
+            the declared return type and the angle of polarization (aop)
+            still being computed internally but discarded. Callers relying
+            on a 2-tuple return will break.
 
         Args:
             bits_intensity: Quantized intensity values from the sensor.
 
         Returns:
-            Tuple of degree and angle of polarization arrays.
+            Degree of polarization array.
         """
         s0: NDArray[NDArray[float32]]
         s1: NDArray[NDArray[float32]]
@@ -137,4 +143,4 @@ class StokesCalculator:
         dop: NDArray[NDArray[float32]] = self.__compute_degree_of_polarization(s0=s0, s1=s1, s2=s2)
         aop: NDArray[NDArray[float32]] = self.__compute_angle_of_polarization(s1=s1, s2=s2)
 
-        return dop, aop
+        return dop
