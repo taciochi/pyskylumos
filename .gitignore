@@ -3,3 +3,7 @@ __pycache__/
 dist/
 .idea/
 .DS_Store
+AGENTS.md
+CLAUDE.md
+.claude/
+.codex/
