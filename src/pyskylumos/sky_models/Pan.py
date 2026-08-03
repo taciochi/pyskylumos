@@ -244,11 +244,11 @@ class Pan(SkySimulator):
 
         above_anti_sun_singularity_point = anti_sun_position.directional_offset_by(
             position_angle=0 * deg,
-            separation=angle_between_sun_babinet * rad
+            separation=angle_between_sun_brewster * rad
         )
         below_anti_sun_singularity_point = anti_sun_position.directional_offset_by(
             position_angle=0 * deg,
-            separation=-angle_between_sun_brewster * rad
+            separation=-angle_between_sun_babinet * rad
         )
 
         if altitude_min_clip:
