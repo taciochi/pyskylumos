@@ -224,11 +224,12 @@ class Berry(SkySimulator):
         aop = self.__get_aop(omega, sun_azimuth=sun_position.az.radian)
         dop = self.__get_dop(omega)
 
-        mask: NDArray[bool] = self.sky_map.alt.deg <= altitude_min_clip
-        radiance[mask] = None
-        dop[mask] = None
-        aop[mask] = None
-        scattering_angle[mask] = None
+        if altitude_min_clip is not None:
+            mask: NDArray[bool] = self.sky_map.alt.deg <= altitude_min_clip
+            radiance[mask] = None
+            dop[mask] = None
+            aop[mask] = None
+            scattering_angle[mask] = None
 
         above_sun_singularity_point: SkyCoord = sun_position.directional_offset_by(
             position_angle=0 * deg,

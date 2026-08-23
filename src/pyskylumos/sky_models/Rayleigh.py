@@ -169,11 +169,12 @@ class Rayleigh(SkySimulator):
             observed_particle_azimuth=self.sky_map.az.radian
         )
 
-        mask: NDArray[bool] = self.sky_map.alt.deg <= altitude_min_clip
-        radiance[mask] = None
-        dop[mask] = None
-        aop[mask] = None
-        scattering_angle[mask] = None
+        if altitude_min_clip is not None:
+            mask: NDArray[bool] = self.sky_map.alt.deg <= altitude_min_clip
+            radiance[mask] = None
+            dop[mask] = None
+            aop[mask] = None
+            scattering_angle[mask] = None
 
         return [
             dop,

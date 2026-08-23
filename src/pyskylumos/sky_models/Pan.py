@@ -251,11 +251,12 @@ class Pan(SkySimulator):
             separation=-angle_between_sun_babinet * rad
         )
 
-        if altitude_min_clip:
+        if altitude_min_clip is not None:
             mask: NDArray[bool] = self.sky_map.alt.deg <= altitude_min_clip
             radiance[mask] = None
             dop[mask] = None
             aop[mask] = None
+            scattering_angle[mask] = None
 
         return [
             dop,
