@@ -7,3 +7,20 @@ AGENTS.md
 CLAUDE.md
 .claude/
 .codex/
+examples/output/
+quantification/input/
+quantification/output/
+.coverage
+htmlcov/
+*_cache
+
+# Local research papers and archives
+/*.pdf
+/*.zip
+
+# Generated audit evidence
+/audit/baseline_*
+/audit/commands.json
+/audit/coverage.txt
+/audit/evidence.json
+/audit/re_audit_*.json

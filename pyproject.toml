@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling >= 1.26", "build >= 1.2.2.post1", "twine >= 6.1.0"]
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
 name = "pyskylumos"
-version = "0.0.6"
+dynamic = ["version"]
 authors = [
     {name="Teodor-Avram Ciochirca", email="sgtcioch@liverpool.ac.uk"},
     {name="Daniel John Chadwick", email="sgdjohnc@liverpool.ac.uk"},
@@ -15,11 +15,13 @@ maintainers = [
     {name="Teodor-Avram Ciochirca", email="sgtcioch@liverpool.ac.uk"},
     {name="Daniel John Chadwick", email="sgdjohnc@liverpool.ac.uk"},
 ]
-description = "A Python package for simulating skylight polarization sensor recordings using advanced polarization models (including Pan, Berry, and Rayleigh). Designed for researchers and engineers, this tool enables the generation of synthetic datasets for biomimetic navigation, machine learning, computer vision, and atmospheric optics. Ideal for developing and testing bio-inspired sensors, building training data for AI models, and exploring applications in robotics, remote sensing, and environmental monitoring."
+description = "Research toolkit for simulating daylight sky polarization and division-of-focal-plane polarimetric camera measurements with Rayleigh and quartic models."
 readme = "README.md"
-requires-python = ">=3.12.2"
+requires-python = ">=3.12,<3.15"
 classifiers = [
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -32,18 +34,93 @@ classifiers = [
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 dependencies = [
-    "astropy>=7.1.0",
-    "numpy>=2.3.1"
+    "astropy>=8,<9",
+    "numpy>=2.4,<3"
 ]
 keywords=[
-    "simulation", "skylight polarization", "dataset", "machine learning", "biomimetics", "computer vision", "sensor",
-    "athmospheric optics", "synthetic data", "robotics", "navigation", "remote sensing", "bio-inspired",
-    "environmental sensing"
+    "simulation", "skylight polarization", "polarimetry", "division of focal plane", "Rayleigh", "Berry",
+    "Pan", "QuEEN", "quartic model", "dataset", "machine learning", "biomimetics", "computer vision",
+    "sensor", "atmospheric optics", "synthetic data", "robotics", "navigation", "remote sensing",
+    "bio-inspired", "environmental sensing"
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4.0"]
+examples = [
+    "matplotlib>=3.10,<4",
+]
+quantification = [
+    "matplotlib>=3.10,<4",
+    "pillow>=11,<13",
+]
+test = [
+    "matplotlib>=3.10,<4",
+    "pillow>=11,<13",
+    "pytest>=9,<10",
+    "pytest-cov>=7,<8",
+]
+quality = [
+    "mypy>=1.18,<3",
+    "ruff>=0.16,<0.18",
+]
+release = [
+    "build>=1.3,<2",
+    "pip-audit>=2.9,<3",
+    "twine>=7,<8",
+]
+dev = [
+    "build>=1.3,<2",
+    "matplotlib>=3.10,<4",
+    "mypy>=1.18,<3",
+    "pillow>=11,<13",
+    "pip-audit>=2.9,<3",
+    "pre-commit>=4,<5",
+    "pytest>=9,<10",
+    "pytest-cov>=7,<8",
+    "ruff>=0.16,<0.18",
+    "twine>=7,<8",
+]
+jpl = ["jplephem>=2.17,<3"]
+
+[tool.hatch.version]
+path = "src/pyskylumos/_version.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/audit",
+    "/quantification/input",
+    "/quantification/output",
+    "/*.pdf",
+    "/*.zip",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "remote_data: tests that download or use externally cached scientific data",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pyskylumos"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/pyskylumos", "quantification"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["astropy.*"]
+ignore_missing_imports = true
 
 [project.urls]
 Homepage = "https://github.com/taciochi/pyskylumos"
 Issues = "https://github.com/taciochi/pyskylumos/issues"
+Changelog = "https://github.com/taciochi/pyskylumos/blob/main/CHANGELOG.md"

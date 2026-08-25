@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - run: python -m pytest -q -W error
+      - run: python audit/independent_oracle.py
+      - run: python audit/runtime_audit.py
+      - run: python audit/readme_quickstart.py
+      - run: python audit/check_markdown_tables.py
+
+  minimum-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install "numpy==2.4.*" "astropy==8.0.*" ".[test]"
+      - run: python -m pytest -q -W error
+
+  platform-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - run: python audit/clean_install_smoke.py
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test,quality,quantification,release]"
+      - run: ruff format --check src tests audit quantification
+      - run: ruff check src tests audit quantification
+      - run: mypy
+      - run: python -m pytest --cov=pyskylumos --cov-branch --cov-fail-under=90
+      - run: python -m pip check
+      - run: pip-audit
+
+  distributions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install ".[release]"
+      - run: python -m build
+      - run: python -m twine check dist/*
+      - run: python audit/check_distribution.py dist
+      - run: |
+          python -m venv /tmp/pyskylumos-wheel
+          /tmp/pyskylumos-wheel/bin/python -m pip install dist/*.whl
+          cd /tmp
+          /tmp/pyskylumos-wheel/bin/python "$GITHUB_WORKSPACE/audit/clean_install_smoke.py"
+          /tmp/pyskylumos-wheel/bin/python "$GITHUB_WORKSPACE/audit/readme_quickstart.py"
+      - run: |
+          python -m venv /tmp/pyskylumos-sdist
+          /tmp/pyskylumos-sdist/bin/python -m pip install dist/*.tar.gz
+          cd /tmp
+          /tmp/pyskylumos-sdist/bin/python "$GITHUB_WORKSPACE/audit/clean_install_smoke.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/

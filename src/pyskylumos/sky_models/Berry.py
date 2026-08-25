@@ -1,277 +1,133 @@
-"""Berry sky polarization model implementation."""
+"""Berry sky polarization model implementation.
 
-from typing import List
+Implements the quartic polarization-singularity model of:
 
-from astropy.units import deg
-from astropy.time import Time
-from numpy.typing import NDArray
-from numpy import float32, tan, exp, angle, absolute, deg2rad
-from astropy.coordinates import AltAz, SkyCoord, EarthLocation
+    Berry M V, Dennis M R and Lee R L Jr 2004 *Polarization singularities in the
+    clear sky* New J. Phys. **6** 162.
 
-from pyskylumos.sky_models.SkySimulator import SkySimulator
+The four neutral points are split symmetrically about the sun and anti-sun by a
+fixed angular separation. Berry parameterises the split as ``A = tan(delta / 4)``
+where ``delta = 4 arctan(A)`` is the *pairwise* separation, so each point sits at
+``delta / 2`` from the sun. PySkyLumos uses ``delta = 30`` degrees, the midpoint
+of the ranges reported in the literature, placing each neutral point 15 degrees
+from the sun.
+
+Unlike :class:`~pyskylumos.sky_models.AsymmetricQuartic.AsymmetricQuartic`,
+:class:`~pyskylumos.sky_models.Pan.Pan` and
+:class:`~pyskylumos.sky_models.QuEEN.QuEEN`, the separation here does not vary
+with solar elevation.
+
+The returned ``degree of polarization`` field is Berry's published ``|omega|``:
+the normalized-to-unit-maximum intensity of polarization, which the paper also
+calls the unnormalized degree. It is not divided by total daylight intensity.
+
+See the project README mathematical reference, sections 3-5, for the field, the
+OpenSky-derived ``e^{-2i alpha_s}`` global AOP convention, and the distinction
+between Berry's published intensity and physical DoLP.
+
+Direct ``Berry`` output is evaluated in the fixed world stereographic chart.
+Use ``Engine.simulate_sky_polarization`` to transport it into a tilted analyzer
+frame.
+"""
+
+from astropy.coordinates import SkyCoord
+from numpy import absolute, angle, deg2rad, exp, full_like
+
+from pyskylumos._types import ComplexArray, FloatArray
+from pyskylumos.sky_models.QuarticSkyModel import QuarticSkyModel
 
 
-class Berry(SkySimulator):
-    """Simulate sky polarization using the Berry model."""
+class Berry(QuarticSkyModel):
+    """Simulate Berry polarization directly in the fixed world chart."""
 
-    sky_map: SkyCoord
-    __PARAMETERS_SIMULATED: List[str] = [
-        'degree of polarization',
-        'angle of polarization',
-        'radiance',
-        'scattering angle',
+    #: Pairwise angular separation between the two neutral points of a pair, in degrees.
+    NEUTRAL_POINT_SEPARATION_DEG: float = 30.0
 
-        'sun azimuth',
-        'sun elevation',
-
-        'above sun singularity point azimuth',
-        'above sun singularity point elevation',
-
-        'below sun singularity point azimuth',
-        'below sun singularity point elevation',
-
-        'anti-sun azimuth',
-        'anti-sun elevation',
-
-        'above anti-sun singularity point azimuth',
-        'above anti-sun singularity point elevation',
-
-        'below anti-sun singularity point azimuth',
-        'below anti-sun singularity point elevation',
-    ]
-
-    def __init__(
-            self,
-            times: Time,
-            observation_location: EarthLocation,
-            azimuths: NDArray[float32],
-            altitudes: NDArray[float32]
-    ) -> None:
-        """Initialize the Berry simulator with observation geometry.
+    def _neutral_point_offsets(
+        self, sun_altitudes_deg: FloatArray
+    ) -> tuple[FloatArray, FloatArray]:
+        """Return the fixed, symmetric sun-to-neutral-point distances.
 
         Args:
-            times: Observation times for each simulation step.
-            observation_location: Location of the observer on Earth.
-            azimuths: Grid of azimuths (degrees) for sky sampling.
-            altitudes: Grid of altitudes (degrees) for sky sampling.
+            sun_altitudes_deg: Solar elevation in degrees. Unused; Berry's
+                separation does not depend on solar elevation.
+
+        Returns:
+            Tuple of the below-sun (Brewster) and above-sun (Babinet) offsets,
+            both in radians and both equal to half the pairwise separation.
         """
-        self._sky_map = SkyCoord(
-            alt=altitudes * deg, az=azimuths * deg,
-            frame=AltAz(
-                location=observation_location,
-                obstime=times[:, None, None]
-            )
+        offset: FloatArray = full_like(
+            sun_altitudes_deg, deg2rad(self.NEUTRAL_POINT_SEPARATION_DEG / 2), dtype="float64"
         )
 
-    @property
-    def parameters_simulated(self) -> List[str]:
-        """Return the list of parameters produced by the simulation.
+        return offset, offset
 
-        Returns:
-            Names of sky parameters simulated by this model.
-        """
-        return self.__PARAMETERS_SIMULATED
+    def _get_dop(self, field: ComplexArray) -> FloatArray:
+        """Return Berry's published normalized polarization intensity.
 
-    @property
-    def sky_map(self) -> SkyCoord:
-        """Return the current sky map coordinates.
-
-        Returns:
-            The current sky map as an astropy SkyCoord.
-        """
-        return self._sky_map
-
-    @sky_map.setter
-    def sky_map(self, new_sky_map: SkyCoord) -> None:
-        """Update the sky map coordinates.
+        Berry 2004, section 4, models ``|omega|`` as the intensity of
+        polarization (the unnormalized degree) and normalizes its maximum to
+        unity. No project-specific depolarization mapping is applied here.
 
         Args:
-            new_sky_map: New sky coordinate grid.
-        """
-        self._sky_map = new_sky_map
+            field: Complex polarization field.
 
-    @staticmethod
-    def __get_omega(
-            angle_between_neutral_points: NDArray[float32],
-            sun_zenith_angle: NDArray[float32],
-            sun_azimuth: NDArray[float32],
-            observed_point_zenith: NDArray[float32],
-            observed_point_azimuth: NDArray[float32]
-    ) -> NDArray[complex]:
-        """Compute the complex omega field used by the Berry model.
+        Returns:
+            Published field modulus for each sampled point.
+        """
+        return absolute(field)
+
+    def _get_aop(
+        self,
+        field: ComplexArray,
+        sun_azimuth: FloatArray,
+        observed_point_azimuth: FloatArray,
+    ) -> FloatArray:
+        """Compute angle of polarization in the fixed world chart.
+
+        The chart's x-axis is world azimuth zero. Camera-pose and analyzer-basis
+        transport are intentionally outside this direct-model method.
 
         Args:
-            angle_between_neutral_points: Angular separation between neutral points.
-            sun_zenith_angle: Sun zenith angle in radians.
+            field: Complex polarization field.
             sun_azimuth: Sun azimuth in radians.
-            observed_point_zenith: Observed point zenith in radians.
-            observed_point_azimuth: Observed point azimuth in radians.
+            observed_point_azimuth: Observed point azimuth in radians. Unused;
+                Berry's AOP is fixed-world-frame referenced, not
+                meridian-referenced.
 
         Returns:
-            Complex omega field for the Berry model.
+            Fixed-world-chart AOP for each sampled point, in radians.
         """
-        observed_point_projection: NDArray[complex] = (
-                tan(observed_point_zenith / 2) *
-                exp(observed_point_azimuth * 1j)
-        )
+        return 0.5 * angle(field * exp(-2j * sun_azimuth))
 
-        brewster_projection: NDArray[complex] = (
-                exp(sun_azimuth * 1j) *
-                (
-                        (tan(sun_zenith_angle / 2) + tan(angle_between_neutral_points / 4)) /
-                        (1 - tan(sun_zenith_angle / 2) * tan(angle_between_neutral_points / 4))
-                )
-        )
-
-        babinet_projection: NDArray[complex] = (
-                exp(sun_azimuth * 1j) *
-                (
-                        (tan(sun_zenith_angle / 2) - tan(angle_between_neutral_points / 4)) /
-                        (1 + tan(sun_zenith_angle / 2) * tan(angle_between_neutral_points / 4))
-                )
-        )
-
-        arago_projection: NDArray[complex] = (-1 / brewster_projection.conjugate())
-
-        fourth_projection: NDArray[complex] = (-1 / babinet_projection.conjugate())
-
-        return (
-                (
-                        -4 * (observed_point_projection - brewster_projection) *
-                        (observed_point_projection - babinet_projection) *
-                        (observed_point_projection - arago_projection) *
-                        (observed_point_projection - fourth_projection)
-                ) / (
-                        ((1 + absolute(observed_point_projection) ** 2) ** 2) *
-                        absolute(brewster_projection + -1 * arago_projection) *
-                        absolute(babinet_projection + -1 * fourth_projection)
-                )
-        )
-
-    @staticmethod
-    def __get_dop(omega: NDArray[complex]) -> NDArray[float32]:
-        """Compute degree of polarization from the omega field.
+    def _singularity_metadata(
+        self,
+        sun_position: SkyCoord,
+        anti_sun_position: SkyCoord,
+        below_sun_projection: ComplexArray,
+        above_sun_projection: ComplexArray,
+        below_sun_offset: FloatArray,
+        above_sun_offset: FloatArray,
+    ) -> list[FloatArray]:
+        """Return neutral-point positions offset along the solar vertical.
 
         Args:
-            omega: Complex omega field.
+            sun_position: Sun position in the simulator's AltAz frame.
+            anti_sun_position: Anti-sun position in the simulator's AltAz frame.
+            below_sun_projection: Stereographic coordinate of the Brewster point.
+                Unused.
+            above_sun_projection: Stereographic coordinate of the Babinet point.
+                Unused.
+            below_sun_offset: Sun-to-Brewster angular distance in radians.
+            above_sun_offset: Sun-to-Babinet angular distance in radians.
 
         Returns:
-            Degree of polarization for each sampled point.
+            Eight arrays of azimuths and elevations in radians, in the order
+            documented by :meth:`QuarticSkyModel._singularity_metadata`.
         """
-        return absolute(omega) / (2 - absolute(omega))
-
-    @staticmethod
-    def __get_aop(omega: NDArray[complex], sun_azimuth: NDArray[float32]) -> NDArray[float32]:
-        """Compute angle of polarization from the omega field.
-
-        Args:
-            omega: Complex omega field.
-            sun_azimuth: Sun azimuth in radians.
-
-        Returns:
-            Angle of polarization for each sampled point.
-        """
-        return 0.5 * angle(
-            z=(omega * exp(-2j * sun_azimuth))
+        return self._metadata_from_offsets(
+            sun_position=sun_position,
+            anti_sun_position=anti_sun_position,
+            below_sun_offset=below_sun_offset,
+            above_sun_offset=above_sun_offset,
         )
-
-    def simulate_sky(
-            self,
-            cie_sky_type: int,
-            altitude_min_clip: float | None = None,
-            accuracy: bool = False,
-            sun_position: SkyCoord | None = None,
-    ) -> List[NDArray[float32]]:
-        """Simulate Berry sky polarization for the provided configuration.
-
-        Args:
-            cie_sky_type: CIE sky type index for radiance model.
-            altitude_min_clip: Minimum altitude (degrees) to keep; lower values masked.
-            accuracy: Whether to use high-accuracy ephemeris for sun position.
-            sun_position: Optional explicit sun position to use.
-
-        Returns:
-            List of arrays for polarization metrics, radiance, scattering angle,
-            and singularity points relative to sun and anti-sun.
-        """
-        sun_position = self._get_sun(accuracy=accuracy, sun_position=sun_position)
-        anti_sun_position: SkyCoord = sun_position.directional_offset_by(
-            position_angle=0 * deg,
-            separation=180 * deg
-        )
-
-        sun_zenith_angle: NDArray[float32] = (90 * deg - sun_position.alt).radian
-        observed_point_zenith_angle: NDArray[float32] = (90 * deg - self.sky_map.alt).radian
-        angle_between_neutral_points: NDArray[float32] = deg2rad(30)
-
-        omega: NDArray[complex] = self.__get_omega(
-            angle_between_neutral_points=angle_between_neutral_points,
-            sun_zenith_angle=sun_zenith_angle,
-            sun_azimuth=sun_position.az.radian,
-            observed_point_zenith=observed_point_zenith_angle,
-            observed_point_azimuth=self.sky_map.az.radian
-        )
-
-        scattering_angle: NDArray[float32] = self.sky_map.separation(sun_position).radian
-
-        radiance: NDArray[float32] = self._get_radiance(
-            cie_sky_type=cie_sky_type,
-            observed_point_zenith_angle=(90 * deg - self.sky_map.alt).radian,
-            sun_zenith_angle=(90 * deg - sun_position.alt).radian,
-            scattering_angle=scattering_angle
-        )
-
-        aop = self.__get_aop(omega, sun_azimuth=sun_position.az.radian)
-        dop = self.__get_dop(omega)
-
-        if altitude_min_clip is not None:
-            mask: NDArray[bool] = self.sky_map.alt.deg <= altitude_min_clip
-            radiance[mask] = None
-            dop[mask] = None
-            aop[mask] = None
-            scattering_angle[mask] = None
-
-        above_sun_singularity_point: SkyCoord = sun_position.directional_offset_by(
-            position_angle=0 * deg,
-            separation=15 * deg
-        )
-
-        below_sun_singularity_point: SkyCoord = sun_position.directional_offset_by(
-            position_angle=0 * deg,
-            separation=-15 * deg
-        )
-
-        above_anti_sun_singularity_point: SkyCoord = anti_sun_position.directional_offset_by(
-            position_angle=0 * deg,
-            separation=15 * deg
-        )
-
-        below_anti_sun_singularity_point: SkyCoord = anti_sun_position.directional_offset_by(
-            position_angle=0 * deg,
-            separation=-15 * deg
-        )
-
-        return [
-            dop,
-            aop,
-            radiance,
-            scattering_angle,
-
-            sun_position.alt.radian,
-            sun_position.az.radian,
-
-            above_sun_singularity_point.az.radian,
-            above_sun_singularity_point.alt.radian,
-
-            below_sun_singularity_point.az.radian,
-            below_sun_singularity_point.alt.radian,
-
-            anti_sun_position.alt.radian,
-            anti_sun_position.az.radian,
-
-            above_anti_sun_singularity_point.az.radian,
-            above_anti_sun_singularity_point.alt.radian,
-
-            below_anti_sun_singularity_point.az.radian,
-            below_anti_sun_singularity_point.alt.radian,
-        ]

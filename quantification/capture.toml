@@ -1,0 +1,56 @@
+# Capture assumptions recovered from pyskylumos_quantification.zip.
+# The TIFF metadata does not contain time, location, or camera orientation; these
+# values therefore remain explicit, auditable assumptions rather than metadata.
+
+[capture]
+# The source scripts' 16:05 was local British Summer Time. An independent
+# raw-starburst/ephemeris search confirms the corresponding 15:05 UTC minute.
+time_utc = "2025-09-22T15:05:05"
+latitude_deg = 53.6358
+longitude_deg = -2.52229
+height_m = 1000.0
+
+[camera]
+image_height = 2048
+image_width = 2448
+focal_length_micrometers = 1800.0
+pixel_pitch_micrometers = 3.45
+lens_conjugation_type = "stereographic"
+yaw_deg = 15.0
+altitude_min_deg = 1.0
+sun_exclusion_deg = 10.0
+saturation_threshold = 4090.0
+analyzer_tile = [[90, 45], [135, 0]]
+extinction_ratio = 0.99
+adc_max = 4095.0
+
+[measurement]
+input_dir = "input"
+raw_file = "Snapshot_Unprocessed_0001.tif"
+intensity_file = "Snapshot_Intensity_0001.tif"
+dop_file = "Snapshot_DoLP_0001.tif"
+aop_file = "Snapshot_Azimuth_0001.tif"
+# ThorImageCam and PySkyLumos use analyzer-axis conventions that differ by 90 degrees.
+vendor_aop_offset_deg = 90.0
+
+[quantification]
+# Fixed empirical daylight scale. It is applied once after every model simulation.
+dop_scale = 0.7
+aop_min_measured_dop = 0.05
+
+[checksums]
+"Snapshot_Azimuth_0001.jpg" = "e29110d245905087bbf33c25f8a4551666d1be02553dc2526db555e427972208"
+"Snapshot_Azimuth_0001.tif" = "ffefe62f85a390722dc4c473944c34918b842d56d5bdace69150460e83496d02"
+"Snapshot_DoLP_0001.jpg" = "4689c1237295816cd70f6265faa8ef0a1b978f912c497a3aea5de0d7f82edd61"
+"Snapshot_DoLP_0001.tif" = "e22bc7f9393d4cdcfe93afc6a00cb82436aaf5c5a13976425f5d216abe3c592e"
+"Snapshot_Intensity_0001.jpg" = "4c09983f6b9e5554871d47a50456f9bfe121439e25c22167f481c90979ff866f"
+"Snapshot_Intensity_0001.tif" = "a53e377845f95ada0e7668823ff240bba0ec06df37ede665ee5ec5688d74255f"
+"Snapshot_Quad View_0001.tif" = "7e4689383d71031edc3918d5d9a6ea279f41b42d06ac1765ee27e32dfd5cd75d"
+"Snapshot_Quad View_0002.jpg" = "7a5f8d657cea1bb4e3dbda90a8d21d794b532eab3590fbfb37b67f8197e40fcc"
+"Snapshot_Unprocessed_0001.jpg" = "9c26aa5566279fcf7ce265983a136f5d29b19138fe3ab1d1cfcfa65cbc62e59a"
+"Snapshot_Unprocessed_0001.tif" = "15c09e481ab2ef0ca6a1793a05369dc2194a78767eb41765828c2d64f0945e9b"
+"Snapshot_Unprocessed_0002.jpg" = "bec7b02b8c816028cbffcf1bfac55751079c837b953a134af92f824a9fbf83f9"
+"Snapshot_Unprocessed_0003.jpg" = "6c8382230a0d5870770bb91be824c5a28d36adc98791f714945431edebd6c509"
+"Snapshot_Unprocessed_0004.jpg" = "3821082257c4ac79424b45a78938798e3fc272e3ada7088df2bc07db879dbfd6"
+"Snapshot_Unprocessed_0005.jpg" = "d60d1c9e167b77b96fab7823b55b9595557f6b87e83efd4131148fbc8a9dcc18"
+"Snapshot_Unprocessed_0006.jpg" = "691a467832ffdd11fe1e51414616078985fd1560b1bc9678589f1d2fa506cf76"
