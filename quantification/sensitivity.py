@@ -153,9 +153,7 @@ def score_model(
         "aop_rmse_deg": aop_metrics.rmse,
         "aop_mae_deg": aop_metrics.mae,
         "aop_count": float(aop_metrics.count),
-        "polarization_score": float(
-            np.sqrt((dop_metrics.nrmse**2 + aop_metrics.nrmse**2) / 2.0)
-        ),
+        "polarization_score": float(np.sqrt((dop_metrics.nrmse**2 + aop_metrics.nrmse**2) / 2.0)),
     }
 
 
@@ -216,10 +214,10 @@ def run_sensitivity(
     for parameter, label, value in settings:
         variant = config
         if parameter != "baseline":
-            variant = replace(config, **{parameter: value})
-        masks = build_masks(
-            variant, measured, world_azimuths, altitudes, sun_azimuth, sun_altitude
-        )
+            # Annotated Any so one loop can override any swept field by name.
+            override: dict[str, Any] = {parameter: value}
+            variant = replace(config, **override)
+        masks = build_masks(variant, measured, world_azimuths, altitudes, sun_azimuth, sun_altitude)
         times, location, _, _ = _sun_position(variant)
         cie_sky_type, _ = _select_cie_sky_type(variant, measured, masks, times, location)
         cie_by_setting[f"{parameter}={label}"] = cie_sky_type
@@ -582,8 +580,12 @@ def run(
 def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
     """Parse the command line."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--config", type=Path, default=Path(__file__).resolve().parent / "capture.toml")
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "output")
+    parser.add_argument(
+        "--config", type=Path, default=Path(__file__).resolve().parent / "capture.toml"
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path(__file__).resolve().parent / "output"
+    )
     parser.add_argument("--resamples", type=int, default=DEFAULT_RESAMPLES)
     parser.add_argument("--block-tiles", type=int, default=DEFAULT_BLOCK_TILES)
     parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE)

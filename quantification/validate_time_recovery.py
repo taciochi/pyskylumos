@@ -383,9 +383,7 @@ def run_trial(
 
     sun_pixel_x, sun_pixel_y = project_altaz_to_sensor(config, true_azimuth, true_altitude)
     rows, columns = np.ogrid[: config.image_height, : config.image_width]
-    aperture = (columns - sun_pixel_x) ** 2 + (
-        rows - sun_pixel_y
-    ) ** 2 <= aperture_radius_pixels**2
+    aperture = (columns - sun_pixel_x) ** 2 + (rows - sun_pixel_y) ** 2 <= aperture_radius_pixels**2
     aperture_saturation = float(np.mean(counts[aperture] >= config.saturation_threshold))
 
     # The search starts from a deliberately wrong centre, mirroring the local-time
@@ -401,7 +399,7 @@ def run_trial(
     )
     admissible = sum(1 for candidate in candidates if candidate.admissible)
 
-    base = {
+    base: dict[str, Any] = {
         "sweep": sweep,
         "setting": setting,
         "value": value,
@@ -502,15 +500,11 @@ def times_at_solar_elevations(
         index = int(np.argmin(np.abs(altitudes - elevation)))
         if abs(float(altitudes[index]) - elevation) > 0.5:
             continue
-        selected[elevation] = Time(
-            format_time_utc(grid[index]), scale="utc"
-        )
+        selected[elevation] = Time(format_time_utc(grid[index]), scale="utc")
     return selected
 
 
-def build_sweeps(
-    config: CaptureConfig, *, repeats: int, quick: bool
-) -> list[dict[str, Any]]:
+def build_sweeps(config: CaptureConfig, *, repeats: int, quick: bool) -> list[dict[str, Any]]:
     """Enumerate every trial specification, one dictionary per trial."""
     base_time = Time(config.time_utc, scale="utc")
     # The site culminates near 60 degrees at the solstice, so the sweep stops there.
@@ -711,9 +705,7 @@ def _guard_report(trials: list[RecoveryTrial]) -> dict[str, Any]:
         "silent_failures_caught": len(caught),
         "silent_failures_missed": len(detectable) - len(caught),
         "false_rejections": len(false_rejections),
-        "false_rejection_rate": (
-            len(false_rejections) / len(correct) if correct else 0.0
-        ),
+        "false_rejection_rate": (len(false_rejections) / len(correct) if correct else 0.0),
         "minimum_containment_among_correct": (
             float(min(trial.winner_containment for trial in correct)) if correct else float("nan")
         ),
@@ -734,9 +726,7 @@ def _yaw_alias_fit(trials: list[RecoveryTrial]) -> dict[str, float]:
     the exchange rate between the two, and it bounds how well the acquisition
     time can be known when the pose is uncertain.
     """
-    group = [
-        trial for trial in trials if trial.sweep == "yaw_error" and trial.succeeded
-    ]
+    group = [trial for trial in trials if trial.sweep == "yaw_error" and trial.succeeded]
     if len(group) < 2:
         return {"slope_seconds_per_degree": float("nan"), "r_squared": float("nan")}
     yaw = np.asarray([trial.yaw_error_deg for trial in group], dtype=np.float64)
@@ -830,8 +820,7 @@ def _plot_recovery(output_path: Path, trials: list[RecoveryTrial]) -> None:
             sum(
                 1
                 for trial in group
-                if trial.succeeded
-                and trial.absolute_time_error_seconds > SILENT_FAILURE_SECONDS
+                if trial.succeeded and trial.absolute_time_error_seconds > SILENT_FAILURE_SECONDS
             )
         )
         correct_counts.append(len(group) - refused_counts[-1] - silent_counts[-1])
@@ -858,8 +847,7 @@ def _plot_recovery(output_path: Path, trials: list[RecoveryTrial]) -> None:
     failed = [
         trial.winner_containment
         for trial in default
-        if trial.absolute_time_error_seconds > SILENT_FAILURE_SECONDS
-        and trial.sweep != "yaw_error"
+        if trial.absolute_time_error_seconds > SILENT_FAILURE_SECONDS and trial.sweep != "yaw_error"
     ]
     # Correct recoveries pile up at containment 1.0; jitter so the count is visible.
     jitter = np.random.default_rng(0)
@@ -946,7 +934,9 @@ def run_validation(
         writer.writerows(summary)
 
     successes = [trial for trial in trials if trial.succeeded]
-    clear = [trial for trial in successes if trial.occlusion_fraction == 0.0 and not trial.occlude_sun]
+    clear = [
+        trial for trial in successes if trial.occlusion_fraction == 0.0 and not trial.occlude_sun
+    ]
     report: dict[str, Any] = {
         "schema_version": 1,
         "generated_at_utc": datetime.now(UTC).isoformat(),
