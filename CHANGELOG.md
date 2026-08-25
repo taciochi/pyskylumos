@@ -8,6 +8,36 @@ Section numbers referenced below point into the
 [mathematical reference](README.md#mathematical-reference), where every formula change is
 attributed to its source.
 
+## [0.1.1] — 2026-08-25
+
+No behaviour changed in the importable package. Every module in the wheel is byte-identical to
+0.1.0 except `_version.py`, so upgrading cannot alter a result. This release updates the
+repository-local capture comparison that ships in the source distribution, and the project
+description shown on PyPI.
+
+### Changed
+
+- **The capture comparison is bounded by the lens's usable image circle.**
+  [`quantification/capture.toml`](quantification/capture.toml) gains
+  `camera.usable_image_radius_pixels`, and the evaluation mask now drops every pixel beyond it.
+  The previous mask reached 1025 px — past the lens image circle — so the camera rim entered
+  every score. The rim onset is measured from the capture itself at 850–860 px, where the
+  azimuthal median intensity collapses and the vendor AOP field decoheres; the shipped limit of
+  800 px clears it with enough margin to absorb the 20 px optical-centre offset. `results.json`
+  records the equivalent altitude and sky fraction, and every residual figure now states the
+  retained field in its title.
+- **`camera.altitude_min_deg` no longer sets the comparison field.** It is now only the
+  simulation-domain clip that keeps the CIE luminance formula, undefined below the horizon, away
+  from below-horizon rays. Its value is unchanged at 1.0.
+
+### Added
+
+- [`quantification/sensitivity.py`](quantification/sensitivity.py) re-derives the ranking across
+  every declared assumption and attaches moving-block bootstrap intervals to the scores.
+- [`quantification/validate_time_recovery.py`](quantification/validate_time_recovery.py)
+  characterizes the image-anchored time recovery against rendered frames whose acquisition time
+  is known exactly, reporting its failure modes rather than a single success.
+
 ## [0.1.0] — 26.08.2026
 
 The first release with a documented provenance for every formula. It doubles the number of sky

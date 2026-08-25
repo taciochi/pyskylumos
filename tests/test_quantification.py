@@ -37,7 +37,9 @@ def _write_tiff(path: Path, values: np.ndarray) -> None:
     Image.fromarray(np.asarray(values, dtype=np.uint16)).save(path)
 
 
-def _write_capture(tmp_path: Path, *, height: int = 8, width: int = 8) -> Path:
+def _write_capture(
+    tmp_path: Path, *, height: int = 8, width: int = 8, radius: float = 1000.0
+) -> Path:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     rows, columns = np.indices((height, width))
@@ -71,6 +73,7 @@ pixel_pitch_micrometers = 1.0
 lens_conjugation_type = "stereographic"
 yaw_deg = 15.0
 altitude_min_deg = 1.0
+usable_image_radius_pixels = {radius}
 sun_exclusion_deg = 0.0
 saturation_threshold = 4090.0
 analyzer_tile = [[90, 45], [135, 0]]
@@ -229,6 +232,38 @@ def test_physical_mask_is_common_and_low_dop_only_affects_aop(tmp_path: Path) ->
     assert masks.tile[1, 0]
     assert masks.tile[1, 1]
     assert not masks.aop_tile[1, 1]
+
+
+def test_usable_image_radius_trims_the_outer_field(tmp_path: Path) -> None:
+    config = load_config(_write_capture(tmp_path, height=6, width=6, radius=1.0))
+    shape = (6, 6)
+    measured = MeasuredData(
+        raw=np.full(shape, 1000.0),
+        intensity=np.full(shape, 1000.0),
+        dop=np.full(shape, 0.4),
+        aop=np.zeros(shape),
+        tile_intensity=pool_scalar_2x2(np.full(shape, 1000.0)),
+        tile_dop=pool_scalar_2x2(np.full(shape, 0.4)),
+        tile_aop=pool_axial_2x2(np.zeros(shape)),
+    )
+    masks = build_masks(
+        config,
+        measured,
+        np.zeros(shape),
+        np.full(shape, 30.0),
+        180.0,
+        30.0,
+    )
+    # Only the central tile lies within one pixel of the optical centre; every
+    # measurement is otherwise acceptable, so the radius alone decides the mask.
+    expected = np.zeros((3, 3), dtype=bool)
+    expected[1, 1] = True
+    np.testing.assert_array_equal(masks.tile, expected)
+
+
+def test_non_positive_usable_image_radius_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="usable_image_radius_pixels"):
+        load_config(_write_capture(tmp_path, radius=0.0))
 
 
 def test_synthetic_end_to_end_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

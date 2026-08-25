@@ -62,6 +62,7 @@ class CaptureConfig:
     lens_conjugation_type: str
     yaw_deg: float
     altitude_min_deg: float
+    usable_image_radius_pixels: float
     sun_exclusion_deg: float
     saturation_threshold: float
     aop_min_measured_dop: float
@@ -234,6 +235,7 @@ def load_config(path: Path) -> CaptureConfig:
     extinction_ratio = _real(camera, "extinction_ratio")
     adc_max = _real(camera, "adc_max")
     altitude_min_deg = _real(camera, "altitude_min_deg")
+    usable_image_radius_pixels = _real(camera, "usable_image_radius_pixels")
     sun_exclusion_deg = _real(camera, "sun_exclusion_deg")
     saturation_threshold = _real(camera, "saturation_threshold")
     aop_min_measured_dop = _real(quantification, "aop_min_measured_dop")
@@ -244,6 +246,8 @@ def load_config(path: Path) -> CaptureConfig:
         raise ValueError("camera.adc_max must be positive.")
     if not -90.0 <= altitude_min_deg <= 90.0:
         raise ValueError("camera.altitude_min_deg must lie in [-90, 90].")
+    if usable_image_radius_pixels <= 0.0:
+        raise ValueError("camera.usable_image_radius_pixels must be positive.")
     if not 0.0 <= sun_exclusion_deg <= 180.0:
         raise ValueError("camera.sun_exclusion_deg must lie in [0, 180].")
     if not 0.0 < saturation_threshold <= adc_max:
@@ -273,6 +277,7 @@ def load_config(path: Path) -> CaptureConfig:
         lens_conjugation_type=_string(camera, "lens_conjugation_type"),
         yaw_deg=_real(camera, "yaw_deg"),
         altitude_min_deg=altitude_min_deg,
+        usable_image_radius_pixels=usable_image_radius_pixels,
         sun_exclusion_deg=sun_exclusion_deg,
         saturation_threshold=saturation_threshold,
         aop_min_measured_dop=aop_min_measured_dop,
@@ -554,6 +559,19 @@ def _angular_separation_degrees(
     return np.asarray(np.rad2deg(np.arccos(np.clip(cosine, -1.0, 1.0))), dtype=np.float64)
 
 
+def sensor_pixel_radii(config: CaptureConfig) -> FloatArray:
+    """Return each pixel's radial distance from the assumed optical centre.
+
+    The centring matches ``OpticalConjugator``, which places the optical centre
+    at the geometric centre of the pixel grid.  This radius is therefore a
+    strictly decreasing function of the altitudes that class produces, whatever
+    ``lens_conjugation_type`` is configured.
+    """
+    rows = np.arange(config.image_height, dtype=np.float64) - (config.image_height - 1) / 2.0
+    columns = np.arange(config.image_width, dtype=np.float64) - (config.image_width - 1) / 2.0
+    return np.asarray(np.hypot(rows[:, None], columns[None, :]), dtype=np.float64)
+
+
 def build_masks(
     config: CaptureConfig,
     measured: MeasuredData,
@@ -562,7 +580,13 @@ def build_masks(
     sun_azimuth_deg: float,
     sun_altitude_deg: float,
 ) -> EvaluationMasks:
-    """Build model-independent physical evaluation masks."""
+    """Build model-independent physical evaluation masks.
+
+    The outer bound is ``usable_image_radius_pixels``, the lens's usable image
+    circle, which keeps the camera rim out of every score.  The remaining
+    clauses drop below-horizon geometry, saturated measurements and a region
+    around the Sun.  None of them depends on the model being scored.
+    """
     separation = _angular_separation_degrees(
         world_azimuths, altitudes, sun_azimuth_deg, sun_altitude_deg
     )
@@ -574,6 +598,7 @@ def build_masks(
         & np.isfinite(measured.dop)
         & np.isfinite(measured.aop)
         & (altitudes >= config.altitude_min_deg)
+        & (sensor_pixel_radii(config) <= config.usable_image_radius_pixels)
         & (separation > config.sun_exclusion_deg)
         & (measured.raw < config.saturation_threshold)
         & (measured.intensity < config.saturation_threshold)
@@ -581,7 +606,10 @@ def build_masks(
     tile = pool_mask_2x2(np.asarray(native, dtype=np.bool_))
     aop_tile = tile & (measured.tile_dop >= config.aop_min_measured_dop)
     if not np.any(native) or not np.any(tile) or not np.any(aop_tile):
-        raise ValueError("The configured physical masks leave no usable capture pixels.")
+        raise ValueError(
+            "The configured physical masks leave no usable capture pixels; "
+            "camera.usable_image_radius_pixels may be too small."
+        )
     return EvaluationMasks(native=np.asarray(native), tile=tile, aop_tile=aop_tile)
 
 
@@ -787,6 +815,7 @@ def _plot_model(
     measured: MeasuredData,
     masks: EvaluationMasks,
     arrays: ModelArrays,
+    field_label: str,
     show: bool,
 ) -> None:
     try:
@@ -841,7 +870,7 @@ def _plot_model(
         axis.set_title(title)
         axis.axis("off")
         figure.colorbar(handle, ax=axis, fraction=0.046, pad=0.04)
-    figure.suptitle(f"{model}: capture quantification")
+    figure.suptitle(f"{model}: capture quantification ({field_label})")
     figure.savefig(output_path, dpi=150, bbox_inches="tight")
     if show:
         plt.show()
@@ -959,6 +988,14 @@ def run_quantification(
         sun_altitude_deg,
     )
     vendor_validation = validate_vendor_polarization(config, measured, masks)
+    # Describe the retained field through the configured projection rather than
+    # re-deriving it, so the reported altitude follows lens_conjugation_type.
+    inside_field = sensor_pixel_radii(config) <= config.usable_image_radius_pixels
+    field_altitude_min_deg = float(np.nanmin(altitudes[inside_field]))
+    field_sky_fraction = float(1.0 - np.cos(np.deg2rad(90.0 - field_altitude_min_deg)))
+    field_label = (
+        f"r ≤ {config.usable_image_radius_pixels:.0f} px, altitude ≥ {field_altitude_min_deg:.1f}°"
+    )
     cie_sky_type, cie_rows = _select_cie_sky_type(config, measured, masks, times, location)
 
     resolved_output = output_dir.expanduser().resolve()
@@ -984,6 +1021,7 @@ def run_quantification(
             measured,
             masks,
             arrays,
+            field_label,
             show,
         )
         print(
@@ -1026,6 +1064,9 @@ def run_quantification(
             "aop_period_deg": 180.0,
             "aop_normalization_range_deg": 90.0,
             "altitude_min_deg": config.altitude_min_deg,
+            "usable_image_radius_pixels": config.usable_image_radius_pixels,
+            "usable_image_radius_altitude_deg": field_altitude_min_deg,
+            "usable_image_sky_fraction": field_sky_fraction,
             "sun_exclusion_deg": config.sun_exclusion_deg,
             "saturation_threshold": config.saturation_threshold,
             "aop_min_measured_dop": config.aop_min_measured_dop,

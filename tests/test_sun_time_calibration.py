@@ -46,6 +46,7 @@ def _camera_config(tmp_path: Path, *, height: int = 128, width: int = 128) -> Ca
         lens_conjugation_type="stereographic",
         yaw_deg=15.0,
         altitude_min_deg=1.0,
+        usable_image_radius_pixels=1000.0,
         sun_exclusion_deg=10.0,
         saturation_threshold=4090.0,
         aop_min_measured_dop=0.05,
@@ -133,6 +134,7 @@ pixel_pitch_micrometers = 1.0
 lens_conjugation_type = "stereographic"
 yaw_deg = 0.0
 altitude_min_deg = 1.0
+usable_image_radius_pixels = 1000.0
 sun_exclusion_deg = 10.0
 saturation_threshold = 4090.0
 analyzer_tile = [[90, 45], [135, 0]]

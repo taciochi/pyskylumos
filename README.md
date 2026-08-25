@@ -601,7 +601,8 @@ for the details.
 canonical models against a local Thorlabs polarization-camera capture. It reports corrected
 180°-periodic AOP errors, DOP errors after one shared empirical 0.7 scale, and a separate
 affine-aligned raw-image diagnostic. One globally selected CIE radiance type and one
-capture-derived mask are reused for every model.
+capture-derived mask are reused for every model. That mask is bounded by the lens's usable
+image circle, measured from the capture itself, so the camera rim never enters a score.
 
 ```console
 python -m pip install -e ".[quantification]"
@@ -615,7 +616,11 @@ MPLBACKEND=Agg python quantification/quantify_models.py \
 
 The calibration command is read-only unless `--write-config` is passed. It searches the raw
 solar starburst independently of the polarization models and supports the corrected capture
-minute of 15:05 UTC. The large capture and generated reports are deliberately gitignored.
+minute of 15:05 UTC. Two further scripts characterize that result rather than produce it:
+`sensitivity.py` re-derives the ranking across every declared assumption and attaches
+moving-block bootstrap intervals, and `validate_time_recovery.py` measures the operating
+envelope of the time recovery against rendered frames whose acquisition time is known exactly.
+The large capture and generated reports are deliberately gitignored.
 The scripts verify the local files against the hashes in `quantification/capture.toml` before
 running. See the
 [quantification guide](quantification/README.md) for extraction, calibration, metric and rank

@@ -17,7 +17,20 @@ focal_length_micrometers = 1800.0
 pixel_pitch_micrometers = 3.45
 lens_conjugation_type = "stereographic"
 yaw_deg = 15.0
+# Simulation-domain clip only. The CIE luminance formula is undefined below the
+# horizon, so below-horizon rays are clipped before a model sees them. It does
+# not set the comparison field; usable_image_radius_pixels does.
 altitude_min_deg = 1.0
+# The comparison is restricted to the lens's usable image circle. Measured from
+# the capture: the azimuthal median of Snapshot_Intensity_0001.tif collapses
+# from 1.41x its mid-field (r = 400-600 px) level at r = 850 px to 0.87x at
+# 860 px and 0.28x at 900 px, and vendor AOP coherence falls from 0.994 at
+# 850 px to 0.93 at 900 px and 0.47 at 1050 px. That is the camera rim, not
+# sky. 800 px clears the onset by ~50 px, which also absorbs the ~20 px offset
+# between the illuminated disc centre and the assumed optical centre. Under the
+# stereographic mapping above it is altitude >= 15.1 deg, 74% of the hemisphere
+# by solid angle.
+usable_image_radius_pixels = 800.0
 sun_exclusion_deg = 10.0
 saturation_threshold = 4090.0
 analyzer_tile = [[90, 45], [135, 0]]
