@@ -24,3 +24,5 @@ htmlcov/
 /audit/coverage.txt
 /audit/evidence.json
 /audit/re_audit_*.json
+
+misc/
