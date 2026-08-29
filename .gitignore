@@ -26,3 +26,5 @@ htmlcov/
 /audit/re_audit_*.json
 
 misc/
+recovery/
+proposals/

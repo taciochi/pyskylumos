@@ -417,3 +417,351 @@ def test_every_tilted_model_runs_through_measurement(engine, model):
 
     assert np.isfinite(measurement["dop"]).any()
     assert np.isfinite(measurement["aop"]).any()
+
+
+def rotation_about_axis(axis_index, angle):
+    """Return a right-handed rotation about one North-East-Up basis axis."""
+    axis = np.zeros(3)
+    axis[axis_index] = 1.0
+    cross_matrix = np.array(
+        [
+            [0.0, -axis[2], axis[1]],
+            [axis[2], 0.0, -axis[0]],
+            [-axis[1], axis[0], 0.0],
+        ]
+    )
+    return (
+        np.eye(3) * np.cos(angle)
+        + (1.0 - np.cos(angle)) * np.outer(axis, axis)
+        + np.sin(angle) * cross_matrix
+    )
+
+
+@pytest.mark.parametrize("model", ["RAYLEIGH", "DEPOLARIZED_RAYLEIGH", "BERRY", "PAN", "QUEEN"])
+def test_identity_matrix_is_exactly_the_untilted_path(engine, model):
+    azimuths, altitudes = engine.get_initial_azimuth_altitude(altitude_min_clip=0)
+    untilted, untilted_names = simulate(engine, model, azimuths, altitudes)
+    identity, identity_names = simulate(
+        engine,
+        model,
+        azimuths,
+        altitudes,
+        sensor_to_world_rotation_matrix=np.eye(3),
+    )
+
+    assert identity_names == untilted_names
+    for actual, expected in zip(identity, untilted, strict=True):
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_identity_matrix_does_not_mask_the_chart_nadir(engine):
+    # Transport at exact identity is not a no-op: it would NaN-mask the nadir.
+    # Canonicalizing identity to the no-rotation path is what protects this.
+    azimuths = np.array([[0.0, 45.0], [90.0, 135.0]])
+    altitudes = np.array([[-90.0, 30.0], [60.0, 85.0]])
+
+    untilted, _ = simulate(engine, "RAYLEIGH", azimuths, altitudes)
+    identity, _ = simulate(
+        engine,
+        "RAYLEIGH",
+        azimuths,
+        altitudes,
+        sensor_to_world_rotation_matrix=np.eye(3),
+    )
+
+    assert np.isfinite(untilted[1][0, 0, 0])
+    np.testing.assert_array_equal(identity[1], untilted[1])
+
+
+def test_near_identity_rotation_is_not_collapsed_to_no_rotation(engine):
+    azimuths = np.array([[-120.0, -25.0], [80.0, 175.0]])
+    altitudes = np.array([[12.0, 38.0], [48.0, 82.0]])
+    # Well inside the 1e-6 validation tolerance, which must not be reused to
+    # canonicalize a genuine rotation onto the no-rotation path.
+    rotation = rotation_about_axis(0, 1e-4)
+    assert np.allclose(rotation, np.eye(3), rtol=0.0, atol=1e-3)
+
+    untilted, _ = simulate(engine, "RAYLEIGH", azimuths, altitudes)
+    rotated, _ = simulate(
+        engine,
+        "RAYLEIGH",
+        azimuths,
+        altitudes,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+
+    assert np.max(np.abs(axial_residual(rotated[1], untilted[1]))) > 1e-9
+
+
+@pytest.mark.parametrize(
+    "azimuthal_tilt, tilt_angle",
+    [(0.0, 0.35), (0.63, -0.31), (0.48, 0.37), (-0.71, 0.43), (1.2, -0.9)],
+)
+def test_legacy_tilt_matches_its_equivalent_rotation_matrix(engine, azimuthal_tilt, tilt_angle):
+    azimuths, altitudes = engine.get_initial_azimuth_altitude(altitude_min_clip=0)
+    rotation = rodrigues_rotation_oracle(azimuthal_tilt, tilt_angle)
+
+    legacy, legacy_names = simulate(
+        engine,
+        "QUEEN",
+        azimuths,
+        altitudes,
+        altitude_min_clip=0,
+        sensor_azimuthal_tilt_radians=azimuthal_tilt,
+        sensor_tilt_angle_radians=tilt_angle,
+    )
+    matrix, matrix_names = simulate(
+        engine,
+        "QUEEN",
+        azimuths,
+        altitudes,
+        altitude_min_clip=0,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+
+    assert matrix_names == legacy_names
+    # The two rotations are built by different algebra and agree only to the
+    # last ulp, so the simulated fields match to tolerance rather than bitwise.
+    for actual, expected in zip(matrix, legacy, strict=True):
+        np.testing.assert_allclose(actual, expected, atol=2e-9, equal_nan=True)
+
+
+def test_optical_axis_twist_moves_rays_and_is_not_an_analyzer_offset(engine):
+    azimuths = np.array([[-120.0, -25.0], [80.0, 175.0]])
+    altitudes = np.array([[12.0, 38.0], [48.0, 82.0]])
+    twist_degrees = 30.0
+    # A pure rotation about Up is inexpressible with the horizontal-axis tilt pair.
+    rotation = rotation_about_axis(2, np.deg2rad(twist_degrees))
+
+    twisted, _ = simulate(
+        engine,
+        "RAYLEIGH",
+        azimuths,
+        altitudes,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+    offset_only, _ = simulate(
+        engine,
+        "RAYLEIGH",
+        azimuths,
+        altitudes,
+        azimuth_rotation_angle=twist_degrees,
+    )
+    untilted, _ = simulate(engine, "RAYLEIGH", azimuths, altitudes)
+
+    # The ray grid genuinely moved, so the sampled sky differs.
+    assert not np.allclose(twisted[0], untilted[0], atol=1e-6)
+    # A uniform analyzer offset does not reproduce it.
+    assert np.max(np.abs(axial_residual(twisted[1], offset_only[1]))) > 1e-6
+
+
+@pytest.mark.parametrize("axis_index", [0, 1, 2])
+def test_isolated_axis_rotations_match_independent_oracles(engine, axis_index):
+    sensor_azimuths = np.array([[-120.0, -25.0, 35.0], [80.0, 135.0, 175.0]])
+    sensor_altitudes = np.array([[12.0, 38.0, 72.0], [18.0, 48.0, 82.0]])
+    rotation = rotation_about_axis(axis_index, 0.41)
+
+    _assert_matrix_path_matches_oracles(engine, sensor_azimuths, sensor_altitudes, rotation)
+
+
+def test_non_commuting_composition_matches_independent_oracles(engine):
+    sensor_azimuths = np.array([[-110.0, -10.0, 40.0], [70.0, 155.0, 179.0]])
+    sensor_altitudes = np.array([[15.0, 45.0, 70.0], [22.0, 52.0, 78.0]])
+    first = rotation_about_axis(2, 0.55)
+    second = rotation_about_axis(0, -0.38)
+    rotation = second @ first
+    assert not np.allclose(rotation, first @ second)
+
+    _assert_matrix_path_matches_oracles(engine, sensor_azimuths, sensor_altitudes, rotation)
+
+
+def _assert_matrix_path_matches_oracles(engine, sensor_azimuths, sensor_altitudes, rotation):
+    """Compare the matrix path against independently derived rays and AOP."""
+    sensor_directions = directions_from_degrees(sensor_azimuths, sensor_altitudes)
+    world_directions = np.einsum("ij,...j->...i", rotation, sensor_directions)
+    world_azimuths, world_altitudes = directions_to_degrees_oracle(world_directions)
+
+    actual, names = simulate(
+        engine,
+        "RAYLEIGH",
+        sensor_azimuths,
+        sensor_altitudes,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+    simulator = Engine._Engine__get_sky_simulator(
+        times=TIMES,
+        sky_model="RAYLEIGH",
+        azimuths=world_azimuths,
+        altitudes=world_altitudes,
+        observation_location=LOCATION,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PanFidelityWarning)
+        warnings.simplefilter("ignore", NeutralPointRangeWarning)
+        direct = simulator.simulate_sky(cie_sky_type=4, sun_position=SUN)
+    expected_aop = transport_aop_oracle(
+        direct[1],
+        world_directions,
+        sensor_directions,
+        rotation,
+    )
+
+    assert names == simulator.parameters_simulated
+    np.testing.assert_allclose(actual[0], direct[0], atol=2e-12, equal_nan=True)
+    np.testing.assert_allclose(actual[2], direct[2], atol=2e-12, equal_nan=True)
+    valid = np.isfinite(actual[1]) & np.isfinite(expected_aop)
+    assert valid.any()
+    assert np.max(np.abs(axial_residual(actual[1][valid], expected_aop[valid]))) < 2e-9
+
+
+def test_matrix_altitude_mask_is_applied_to_rotated_world_directions(engine):
+    azimuths = np.array([[90.0, 0.0], [180.0, -90.0]])
+    altitudes = np.full((2, 2), 5.0)
+    rotation = rotation_about_axis(0, np.deg2rad(-20.0))
+    world_directions = np.einsum(
+        "ij,...j->...i", rotation, directions_from_degrees(azimuths, altitudes)
+    )
+    _, world_altitudes = directions_to_degrees_oracle(world_directions)
+
+    values, _ = simulate(
+        engine,
+        "RAYLEIGH",
+        azimuths,
+        altitudes,
+        altitude_min_clip=0.0,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+
+    expected_mask = world_altitudes <= 0.0
+    assert expected_mask.any()
+    assert (~expected_mask).any()
+    for field in values[:4]:
+        np.testing.assert_array_equal(np.isnan(field[0]), expected_mask)
+
+
+def test_matrix_azimuth_rotation_is_applied_after_basis_transport(engine):
+    azimuths = np.array([[-100.0, -20.0], [65.0, 150.0]])
+    altitudes = np.array([[15.0, 40.0], [65.0, 80.0]])
+    rotation = rotation_about_axis(1, 0.33)
+
+    base, _ = simulate(engine, "PAN", azimuths, altitudes, sensor_to_world_rotation_matrix=rotation)
+    rotated, _ = simulate(
+        engine,
+        "PAN",
+        azimuths,
+        altitudes,
+        azimuth_rotation_angle=25.0,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+
+    expected = (base[1] - np.deg2rad(25.0) + np.pi / 2.0) % np.pi - np.pi / 2.0
+    np.testing.assert_allclose(rotated[1], expected, atol=2e-15, equal_nan=True)
+
+
+def test_matrix_simulation_preserves_inputs_and_accepts_float32(engine):
+    azimuths = np.array([[0.0, 45.0], [90.0, 135.0]], dtype=np.float32)
+    altitudes = np.array([[15.0, 35.0], [55.0, 75.0]], dtype=np.float32)
+    rotation = rotation_about_axis(0, 0.4).astype(np.float32)
+    original_azimuths = azimuths.copy()
+    original_altitudes = altitudes.copy()
+    original_rotation = rotation.copy()
+
+    values, _ = simulate(
+        engine,
+        "RAYLEIGH",
+        azimuths,
+        altitudes,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+
+    np.testing.assert_array_equal(azimuths, original_azimuths)
+    np.testing.assert_array_equal(altitudes, original_altitudes)
+    np.testing.assert_array_equal(rotation, original_rotation)
+    assert all(value.dtype == np.float64 for value in values)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["RAYLEIGH", "DEPOLARIZED_RAYLEIGH", "ASYMMETRIC", "BERRY", "PAN", "QUEEN"],
+)
+def test_every_model_runs_through_measurement_with_a_rotation_matrix(engine, model):
+    azimuths, altitudes = engine.get_initial_azimuth_altitude(altitude_min_clip=0)
+    rotation = rotation_about_axis(2, 0.44) @ rotation_about_axis(0, 0.22)
+
+    values, names = simulate(
+        engine,
+        model,
+        azimuths,
+        altitudes,
+        altitude_min_clip=0,
+        sensor_to_world_rotation_matrix=rotation,
+    )
+    sky = dict(zip(names, values, strict=True))
+    measurement = engine.simulate_measurement(
+        sky["degree of polarization"],
+        sky["angle of polarization"],
+        sky["radiance"],
+    )
+
+    finite_dop = sky["degree of polarization"][np.isfinite(sky["degree of polarization"])]
+    finite_aop = sky["angle of polarization"][np.isfinite(sky["angle of polarization"])]
+    assert finite_dop.size and ((finite_dop >= 0.0) & (finite_dop <= 1.0)).all()
+    assert finite_aop.size and ((finite_aop >= -np.pi / 2) & (finite_aop < np.pi / 2)).all()
+    assert np.isfinite(measurement["dop"]).any()
+    assert np.isfinite(measurement["aop"]).any()
+
+
+@pytest.mark.parametrize(
+    "matrix, error_type, message",
+    [
+        ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], TypeError, "numpy.ndarray"),
+        (np.eye(3, dtype=np.int64), TypeError, "floating-point dtype"),
+        (np.eye(3, dtype=bool), TypeError, "floating-point dtype"),
+        (np.eye(3, dtype=np.complex128), TypeError, "floating-point dtype"),
+        (np.eye(3, dtype=object), TypeError, "floating-point dtype"),
+        (np.eye(2), ValueError, r"shape \(3, 3\)"),
+        (np.ones(3), ValueError, r"shape \(3, 3\)"),
+        (np.eye(3)[np.newaxis, ...], ValueError, r"shape \(3, 3\)"),
+        (np.full((3, 3), np.nan), ValueError, "finite"),
+        (np.full((3, 3), np.inf), ValueError, "finite"),
+        (np.full((3, 3), -np.inf), ValueError, "finite"),
+        (2.0 * np.eye(3), ValueError, "orthonormal"),
+        (np.array([[1.0, 0.5, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), ValueError, "orthonormal"),
+        (np.diag([1.0, 1.0, -1.0]), ValueError, "determinant"),
+    ],
+)
+def test_rotation_matrix_is_validated(engine, matrix, error_type, message):
+    azimuths = np.zeros((2, 2))
+    altitudes = np.full((2, 2), 45.0)
+
+    with pytest.raises(error_type, match=message):
+        simulate(
+            engine,
+            "RAYLEIGH",
+            azimuths,
+            altitudes,
+            sensor_to_world_rotation_matrix=matrix,
+        )
+
+
+@pytest.mark.parametrize(
+    "tilt_kwargs",
+    [
+        {"sensor_azimuthal_tilt_radians": 0.2},
+        {"sensor_tilt_angle_radians": 0.2},
+        {"sensor_azimuthal_tilt_radians": 0.2, "sensor_tilt_angle_radians": 0.3},
+    ],
+)
+def test_rotation_matrix_conflicts_with_the_legacy_tilt_arguments(engine, tilt_kwargs):
+    azimuths = np.zeros((2, 2))
+    altitudes = np.full((2, 2), 45.0)
+
+    with pytest.raises(ValueError, match="cannot be combined with"):
+        simulate(
+            engine,
+            "RAYLEIGH",
+            azimuths,
+            altitudes,
+            sensor_to_world_rotation_matrix=np.eye(3),
+            **tilt_kwargs,
+        )

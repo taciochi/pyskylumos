@@ -174,6 +174,22 @@ analyzer orientations, and all four are needed to recover one polarization state
 sensor therefore yields a 32×32 map of reconstructed DOP and AOP. This is the real behaviour
 of a division-of-focal-plane camera, not an approximation.
 
+**Pointing the camera somewhere else.** The quick start uses the default upward-looking
+pose, which is why steps 3 and 4 pass the direction grid straight through: looking straight
+up, it is simultaneously sensor-local and world AltAz. To point the camera anywhere else,
+add one argument to step 4:
+
+```python
+    sensor_to_world_rotation_matrix=rotation,  # (3, 3), maps sensor vectors to world
+```
+
+The grid from step 3 is then read as **sensor-local**, and Engine rotates the rays into
+world coordinates and transports AOP back into the rotated analyzer frame for you. See
+[Camera pose](#camera-pose-rotation-and-tilt) for the matrix contract, the simpler
+horizontal-axis tilt arguments, and why a uniform `azimuth_rotation_angle` is not a
+substitute. A runnable comparison is in
+[`examples/rotated_pose.py`](examples/rotated_pose.py).
+
 ## How a simulation flows
 
 ```
@@ -522,6 +538,72 @@ the derivation is in [section 10](#10-conventions).
 a positive `sensor_tilt_angle_radians` moves the East horizon towards the zenith and the
 zenith towards West.
 
+### General 3D pose: `sensor_to_world_rotation_matrix`
+
+The tilt pair above describes a rotation about a *horizontal* axis. That is two degrees of
+freedom, so it cannot express an arbitrary camera orientation — most visibly, it cannot
+express a twist about the optical axis while the camera is also tipped. For the general
+case, pass a rotation matrix instead:
+
+```python
+import numpy as np
+
+# A yaw about Up composed with a tip about North. Order matters: these do not commute.
+yaw = np.array([[np.cos(0.5), -np.sin(0.5), 0.0],
+                [np.sin(0.5), np.cos(0.5), 0.0],
+                [0.0, 0.0, 1.0]])
+tip = np.array([[1.0, 0.0, 0.0],
+                [0.0, np.cos(0.2), -np.sin(0.2)],
+                [0.0, np.sin(0.2), np.cos(0.2)]])
+
+sky_parameters, names = engine.simulate_sky_polarization(
+    sky_model="QUEEN",
+    observation_location=observation_location,
+    times=Time(["2024-07-01T12:00:00"]),
+    cie_sky_type=4,
+    altitudes=altitudes,  # still the sensor-local grid from the conjugator
+    azimuths=azimuths,
+    sensor_to_world_rotation_matrix=tip @ yaw,
+)
+```
+
+**Direction of the transform.** The matrix maps sensor-local column vectors into world
+coordinates, both in North-East-Up:
+
+```text
+v_world = R @ v_sensor
+```
+
+**What it must satisfy.** A real floating-point NumPy array of shape `(3, 3)`, all finite,
+and a proper rotation: `transpose(R) @ R` is the identity and `det(R)` is `+1`, each within
+an absolute tolerance of `1e-6`. Integer, Boolean, and complex dtypes are rejected. A matrix
+that fails any check raises rather than being projected or normalised onto the nearest
+rotation — silently repairing a caller's pose would hide the bug that produced it. The array
+is converted to float64 internally and is never modified.
+
+**Rules.**
+
+- It is **mutually exclusive** with both tilt arguments; supplying it alongside either one
+  raises `InputValidationError`.
+- It is **one static pose for the whole call**, applied to every value in `times`. A
+  time-varying pose means one call per pose.
+- An **exact identity** is equivalent to omitting the pose entirely, and is bit-identical to
+  it. Note the tolerance above is for *validation* only; it is not used to snap a genuine
+  near-identity rotation onto the no-rotation path, so a rotation of `1e-8` radians is still
+  transported.
+- `azimuth_rotation_angle` composes with it, and stays what it was: a uniform analyzer-zero
+  offset applied last, after the per-pixel basis transport. The two are not
+  interchangeable — a twist about the optical axis moves the ray grid, an analyzer offset
+  does not.
+
+Everything else matches the tilt path: the input grid is sensor-local, `altitude_min_clip`
+is applied to world altitude after rotation, and AOP is transported per pixel into the
+rotated analyzer frame.
+
+Callers working from vehicle attitude own the conversion into this matrix. PySkyLumos takes
+the composed rotation and no heading/pitch/roll convention, because those labels are not
+self-defining: they depend on the body frame, handedness, Euler order, and the direction of
+the stored transform, and picking one here would silently impose it on every caller.
 ### Two direction-only helpers
 
 `Engine.tilt_sensor` and `Engine.rotate_sensor` exist for backward compatibility and operate
@@ -1543,6 +1625,12 @@ A deliberate asymmetry, because the two layers need different things from the sa
   yield a usable direction, so below-horizon altitudes are clamped up to `x`.
 * `SkySimulator.simulate_sky(altitude_min_clip=x)` **masks**. DOP, AOP, radiance and
   scattering angle all become `NaN` where `altitude ≤ x`. Metadata is never masked.
+
+Independently of either setting, radiance is `NaN` for any direction strictly below the
+horizon. The CIE luminance gradation is defined for an upward hemisphere, so a direction
+with no sky above it has no radiance to report. This matters when `altitude_min_clip` is
+`None` or negative, where nothing else would mask those samples; a camera pose is the usual
+way to acquire them, since rotation can tip part of a sensor-local grid below the horizon.
 
 Both behaviours are pinned by tests.
 

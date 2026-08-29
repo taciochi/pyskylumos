@@ -18,6 +18,7 @@ from pyskylumos._validation import (
     require_argument,
     require_integer,
     require_real_array,
+    require_rotation_matrix,
     require_same_shape,
     resolve_deprecated_alias,
 )
@@ -502,6 +503,7 @@ class Engine:
         *,
         sensor_azimuthal_tilt_radians: float | None = None,
         sensor_tilt_angle_radians: float | None = None,
+        sensor_to_world_rotation_matrix: RealArray | None = None,
     ) -> tuple[Sequence[FloatArray], ParameterNames]:
         """Simulate sky polarization parameters for a chosen sky model.
 
@@ -512,12 +514,12 @@ class Engine:
             times: Observation times for each simulation step.
             cie_sky_type: CIE sky type index for radiance model.
             altitudes: Two-dimensional altitude grid in degrees. Interpreted as
-                world AltAz when tilt is omitted and as sensor-local directions
-                when both tilt arguments are supplied.
+                world AltAz when no pose is supplied and as sensor-local
+                directions when either pose representation is supplied.
             azimuths: Two-dimensional azimuth grid in degrees, with the same
                 conditional frame convention as ``altitudes``.
             altitude_min_clip: Minimum world altitude to keep, in degrees. With
-                tilt enabled, masking is evaluated after rotating the rays.
+                a pose enabled, masking is evaluated after rotating the rays.
             azimuth_rotation_angle: Uniform in-plane analyzer offset in degrees.
                 It is subtracted from AOP after Pan conversion and any 3D tilt
                 transport; it does not rotate the sampling grid.
@@ -535,20 +537,30 @@ class Engine:
             sensor_tilt_angle_radians: Right-handed sensor-to-world tilt in
                 radians. Must be supplied with
                 ``sensor_azimuthal_tilt_radians``.
+            sensor_to_world_rotation_matrix: General camera pose as a ``(3, 3)``
+                real floating-point proper rotation, mapping sensor-local
+                North-East-Up column vectors into world North-East-Up:
+                ``v_world = R @ v_sensor``. It expresses an arbitrary
+                three-dimensional orientation, unlike the two-parameter tilt
+                pair, and is mutually exclusive with both tilt arguments. One
+                static pose applies to every value in ``times``. An exact
+                identity is equivalent to omitting the pose entirely. The array
+                is validated but never repaired, and is not modified.
 
         Returns:
             Tuple containing simulated sky parameters and their labels. AOP is
             expressed in the active sensor/analyzer frame for every model. Direct
             :class:`~pyskylumos.sky_models.Pan.Pan` simulations retain Pan's
             published local-meridian reference, but this Engine method converts
-            Pan AOP before returning it. When sensor tilt is supplied, input
+            Pan AOP before returning it. When a sensor pose is supplied, input
             directions are sensor-local and AOP includes the geometric basis
-            transport into that tilted sensor frame.
+            transport into that rotated sensor frame.
 
         Raises:
             TypeError: If an argument has an invalid type.
-            ValueError: If array geometry, sky options, or the paired finite
-                tilt contract is invalid.
+            ValueError: If array geometry, sky options, the paired finite tilt
+                contract, or the rotation-matrix contract is invalid, or if a
+                rotation matrix is combined with either tilt argument.
         """
         if not isinstance(times, Time):
             raise InputTypeError("times must be an astropy.time.Time.")
@@ -584,6 +596,14 @@ class Engine:
             raise InputTypeError("model_options must be a dict or None.")
 
         tilt_values = (sensor_azimuthal_tilt_radians, sensor_tilt_angle_radians)
+        if sensor_to_world_rotation_matrix is not None and any(
+            value is not None for value in tilt_values
+        ):
+            raise InputValidationError(
+                "sensor_to_world_rotation_matrix cannot be combined with "
+                "sensor_azimuthal_tilt_radians or sensor_tilt_angle_radians; "
+                "supply exactly one pose representation."
+            )
         if (tilt_values[0] is None) != (tilt_values[1] is None):
             raise InputValidationError(
                 "sensor_azimuthal_tilt_radians and sensor_tilt_angle_radians "
@@ -604,10 +624,22 @@ class Engine:
             np.asarray(azimuths, dtype=np.float64),
             np.asarray(altitudes, dtype=np.float64),
         )
+        # Both public pose representations resolve to one optional non-identity
+        # matrix; downstream geometry never branches on which one produced it.
         sensor_to_world_rotation: FloatArray | None = None
-        simulation_azimuths = azimuths
-        simulation_altitudes = altitudes
-        if (
+        if sensor_to_world_rotation_matrix is not None:
+            resolved = require_rotation_matrix(
+                "sensor_to_world_rotation_matrix",
+                sensor_to_world_rotation_matrix,
+            )
+            # An exact identity is canonicalized to the no-rotation path so it
+            # stays bit-identical to an omitted pose, including at the chart
+            # nadir that transport would otherwise mask. The validation
+            # tolerance is deliberately not reused here: a genuine
+            # near-identity rotation keeps its transport.
+            if not np.array_equal(resolved, np.eye(3)):
+                sensor_to_world_rotation = resolved
+        elif (
             sensor_azimuthal_tilt_radians is not None
             and sensor_tilt_angle_radians is not None
             and sensor_tilt_angle_radians != 0.0
@@ -616,6 +648,10 @@ class Engine:
                 sensor_azimuthal_tilt_radians,
                 sensor_tilt_angle_radians,
             )
+
+        simulation_azimuths = azimuths
+        simulation_altitudes = altitudes
+        if sensor_to_world_rotation is not None:
             simulation_azimuths, simulation_altitudes = rotate_directions(
                 np.asarray(azimuths, dtype=np.float64),
                 np.asarray(altitudes, dtype=np.float64),

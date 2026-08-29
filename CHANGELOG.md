@@ -8,6 +8,52 @@ Section numbers referenced below point into the
 [mathematical reference](README.md#mathematical-reference), where every formula change is
 attributed to its source.
 
+## [0.1.3] — 2026-08-29
+
+Adds a general camera-pose input to the simulation engine. The existing tilt arguments keep
+working unchanged and are not deprecated.
+
+### Added
+
+- **General 3D camera pose.** `Engine.simulate_sky_polarization` accepts
+  `sensor_to_world_rotation_matrix`, a `(3, 3)` proper rotation mapping sensor-local
+  North-East-Up column vectors into world North-East-Up. The existing tilt pair describes a
+  rotation about a horizontal axis, which cannot express an arbitrary orientation — notably
+  a twist about the optical axis on a tipped camera. The matrix path reuses the same ray
+  rotation and per-pixel AOP basis transport as the tilt path, so world-altitude masking
+  still follows rotation and the analyzer offset still applies last. It is mutually
+  exclusive with both tilt arguments and describes one static pose per call. See
+  [Camera pose](README.md#general-3d-pose-sensor_to_world_rotation_matrix).
+- **Rotation-matrix validation.** The supplied matrix must be a real floating-point array of
+  shape `(3, 3)`, all finite, orthonormal, and of determinant `+1` within an absolute
+  tolerance of `1e-6`. An invalid matrix is rejected, never projected onto the nearest
+  rotation. An exact identity is bit-identical to omitting the pose; the validation
+  tolerance is not reused to collapse a genuine near-identity rotation onto that path.
+- **A runnable pose example.** [`examples/rotated_pose.py`](examples/rotated_pose.py)
+  renders one model under an untilted pose and under a yaw-plus-tip rotation, with the
+  axial AOP difference in a third panel. That panel is the point: the difference is not
+  constant, which is what separates a real camera pose from a uniform
+  `azimuth_rotation_angle` offset. The README quick start and `examples/README.md` now
+  point at the pose argument instead of documenting the tilt pair alone.
+
+### Fixed
+
+- **Below-horizon radiance is now masked instead of diverging.** The CIE gradation term
+  `exp(B / cos(zenith))` is defined for an upward hemisphere, and every tabulated `B` is
+  negative, so a direction below the horizon flipped the exponent positive: radiance
+  returned `inf`, or finite values as large as `1e284`, and NumPy emitted an
+  `overflow encountered in exp` `RuntimeWarning`. Such directions now return `NaN`,
+  matching how the package already reports an absent value elsewhere. Clamping was
+  rejected deliberately — substituting the horizon's radiance would report a measurement
+  where there is none.
+
+  This is observable only when `altitude_min_clip` is `None` or negative, because any
+  non-negative clip already masked those samples; the affected set is a strict subset of
+  what `altitude_min_clip=0.0` masks, and a direction at exactly `0°` altitude is
+  unchanged. It was never pose-specific: passing below-horizon altitudes directly
+  reproduced it with no pose at all. A camera pose simply made it easy to reach, since
+  rotation tips part of a sensor-local grid below the horizon.
+
 ## [0.1.2] — 2026-08-29
 
 The importable package is unchanged again; this release touches only the repository-local

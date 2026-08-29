@@ -12,6 +12,11 @@ from pyskylumos.exceptions import ConfigurationError, InputTypeError, InputValid
 
 UNSET: Final = object()
 
+#: Absolute tolerance for the orthonormality and determinant checks applied to a
+#: supplied rotation matrix. It is a validation bound only; it is never used to
+#: collapse a genuine near-identity rotation onto the no-rotation path.
+_ROTATION_TOLERANCE: Final = 1e-6
+
 
 def resolve_deprecated_alias(
     *,
@@ -120,6 +125,51 @@ def require_real_array(name: str, value: Any, *, rank: int | None = 3) -> np.nda
     if not np.issubdtype(value.dtype, np.number) or np.issubdtype(value.dtype, np.complexfloating):
         raise InputTypeError(f"{name} must contain real numeric values; got dtype {value.dtype}.")
     return value
+
+
+def require_rotation_matrix(name: str, value: Any) -> np.ndarray:
+    """Validate a proper ``(3, 3)`` floating-point rotation matrix.
+
+    The matrix is never projected, normalised, or otherwise repaired; an input
+    that fails any check is rejected rather than corrected.
+
+    Args:
+        name: Argument name used in error messages.
+        value: Candidate rotation matrix.
+
+    Returns:
+        A fresh float64 copy of the validated matrix, so later mutation of the
+        result cannot reach the caller's array.
+
+    Raises:
+        InputTypeError: If the value is not a NumPy array or does not have a
+            real floating-point dtype.
+        InputValidationError: If the shape is not ``(3, 3)``, the values are not
+            all finite, or the matrix is not a proper rotation.
+    """
+    if not isinstance(value, np.ndarray):
+        raise InputTypeError(f"{name} must be a numpy.ndarray; got {type(value).__name__}.")
+    if not np.issubdtype(value.dtype, np.floating):
+        raise InputTypeError(
+            f"{name} must have a real floating-point dtype; got dtype {value.dtype}."
+        )
+    if value.shape != (3, 3):
+        raise InputValidationError(f"{name} must have shape (3, 3); got shape {value.shape}.")
+    if not np.isfinite(value).all():
+        raise InputValidationError(f"{name} must contain only finite values.")
+
+    matrix = np.array(value, dtype=np.float64)
+    if not np.allclose(matrix.T @ matrix, np.eye(3), rtol=0.0, atol=_ROTATION_TOLERANCE):
+        raise InputValidationError(
+            f"{name} must be orthonormal; transpose(R) @ R is not the identity "
+            f"within absolute tolerance {_ROTATION_TOLERANCE}."
+        )
+    if not np.allclose(np.linalg.det(matrix), 1.0, rtol=0.0, atol=_ROTATION_TOLERANCE):
+        raise InputValidationError(
+            f"{name} must be a proper rotation with determinant +1; got "
+            f"{float(np.linalg.det(matrix))!r}."
+        )
+    return matrix
 
 
 def require_same_shape(**arrays: np.ndarray) -> tuple[int, ...]:

@@ -234,3 +234,82 @@ def test_every_model_respects_the_shared_invariants(grid, model_name, sun_elevat
     expected_mask = np.broadcast_to(altitudes <= 0.0, dop.shape)
     assert np.all(np.isnan(dop[expected_mask]))
     assert np.all(np.isfinite(dop[~expected_mask]))
+
+
+# --------------------------------------------------------------------------- #
+# R6 -- below-horizon radiance
+# --------------------------------------------------------------------------- #
+
+
+def simulate_unclipped(model_class, azimuths, altitudes):
+    """Run a model with no altitude mask, so radiance is returned unmasked."""
+    sun = SkyCoord(
+        az=[SUN_AZIMUTH] * deg,
+        alt=[33.0] * deg,
+        frame=AltAz(obstime=TIMES, location=LOCATION),
+    )
+    model = model_class(
+        times=TIMES,
+        observation_location=LOCATION,
+        azimuths=azimuths,
+        altitudes=altitudes,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PanFidelityWarning)
+        warnings.simplefilter("ignore", NeutralPointRangeWarning)
+        values = model.simulate_sky(cie_sky_type=4, sun_position=sun, altitude_min_clip=None)
+    return values
+
+
+# Rayleigh and QuEEN cover both families that share SkySimulator._get_radiance.
+RADIANCE_MODELS = [Rayleigh, QuEEN]
+
+
+@pytest.mark.parametrize("model_class", RADIANCE_MODELS)
+def test_below_horizon_radiance_is_nan_and_never_infinite(model_class):
+    azimuths = np.zeros((1, 5))
+    altitudes = np.array([[-45.0, -20.0, -1.0, -1e-9, 30.0]])
+
+    radiance = simulate_unclipped(model_class, azimuths, altitudes)[RADIANCE][0, 0]
+
+    assert not np.isinf(radiance).any()
+    assert np.isnan(radiance[:4]).all()
+    assert np.isfinite(radiance[4])
+
+
+@pytest.mark.parametrize("model_class", RADIANCE_MODELS)
+def test_horizon_boundary_is_not_moved_by_the_below_horizon_mask(model_class):
+    # Exactly 0 degrees must stay finite: cos(zenith) is +6.1e-17 there, so the
+    # mask tests cos <= 0 rather than the altitude, and no epsilon may creep in.
+    azimuths = np.zeros((1, 3))
+    altitudes = np.array([[0.0, 1e-9, -1e-9]])
+
+    radiance = simulate_unclipped(model_class, azimuths, altitudes)[RADIANCE][0, 0]
+
+    assert np.isfinite(radiance[0])
+    assert np.isfinite(radiance[1])
+    assert np.isnan(radiance[2])
+
+
+@pytest.mark.parametrize("model_class", RADIANCE_MODELS)
+def test_above_horizon_radiance_is_unaffected(model_class):
+    azimuths = np.array([[0.0, 90.0, 180.0, 270.0]])
+    altitudes = np.array([[5.0, 30.0, 60.0, 89.0]])
+
+    radiance = simulate_unclipped(model_class, azimuths, altitudes)[RADIANCE][0, 0]
+
+    assert np.isfinite(radiance).all()
+    assert (radiance > 0.0).all()
+
+
+@pytest.mark.parametrize("model_class", RADIANCE_MODELS)
+def test_below_horizon_directions_raise_no_warning(model_class):
+    azimuths = np.zeros((1, 4))
+    altitudes = np.array([[-30.0, -5.0, 10.0, 70.0]])
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        simulate_unclipped(model_class, azimuths, altitudes)
+
+    overflow = [item for item in caught if "overflow" in str(item.message)]
+    assert overflow == []

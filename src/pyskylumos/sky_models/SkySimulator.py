@@ -251,7 +251,11 @@ class SkySimulator(ABC):
             scattering_angle: Scattering angle between sun and observation point (radians).
 
         Returns:
-            Radiance value for each sampled point.
+            Radiance value for each sampled point. Directions below the horizon
+            carry no sky radiance and return NaN: the CIE luminance gradation
+            term is defined for an upward hemisphere, and continuing it past the
+            horizon makes ``exp(B / cos(zenith))`` diverge rather than describe
+            anything physical.
         """
         if isinstance(cie_sky_type, bool) or not isinstance(cie_sky_type, (int, np.integer)):
             raise InputTypeError("cie_sky_type must be an integer from 1 to 15.")
@@ -262,31 +266,36 @@ class SkySimulator(ABC):
         radiance_parameters: dict[str, float] = cls.__cie_sky_types[int(cie_sky_type)]
         half_pi: float = pi / 2
 
-        radiance = (
-            (
-                1
-                + radiance_parameters["A"]
-                * exp(radiance_parameters["B"] / cos(observed_point_zenith_angle))
-            )
-            / (1 + radiance_parameters["A"] * exp(radiance_parameters["B"]))
-        ) * (
-            (
-                1
-                + radiance_parameters["C"]
-                * (
-                    exp(radiance_parameters["D"] * scattering_angle)
-                    - exp(radiance_parameters["D"] * half_pi)
+        # Every tabulated B is negative, so a below-horizon direction flips the
+        # exponent positive and the gradation term diverges. Those samples are
+        # masked rather than clamped: a direction with no sky above it has no
+        # radiance, and substituting the horizon's value would report a
+        # measurement where there is none.
+        cosine_zenith = cos(observed_point_zenith_angle)
+        below_horizon = cosine_zenith <= 0.0
+
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            radiance = (
+                (1 + radiance_parameters["A"] * exp(radiance_parameters["B"] / cosine_zenith))
+                / (1 + radiance_parameters["A"] * exp(radiance_parameters["B"]))
+            ) * (
+                (
+                    1
+                    + radiance_parameters["C"]
+                    * (
+                        exp(radiance_parameters["D"] * scattering_angle)
+                        - exp(radiance_parameters["D"] * half_pi)
+                    )
+                    + radiance_parameters["E"] * cos(scattering_angle) ** 2
                 )
-                + radiance_parameters["E"] * cos(scattering_angle) ** 2
-            )
-            / (
-                1
-                + radiance_parameters["C"]
-                * (
-                    exp(radiance_parameters["D"] * sun_zenith_angle)
-                    - exp(radiance_parameters["D"] * half_pi)
+                / (
+                    1
+                    + radiance_parameters["C"]
+                    * (
+                        exp(radiance_parameters["D"] * sun_zenith_angle)
+                        - exp(radiance_parameters["D"] * half_pi)
+                    )
+                    + radiance_parameters["E"] * cos(sun_zenith_angle) ** 2
                 )
-                + radiance_parameters["E"] * cos(sun_zenith_angle) ** 2
             )
-        )
-        return np.asarray(radiance, dtype=np.float64)
+        return np.asarray(np.where(below_horizon, np.nan, radiance), dtype=np.float64)
