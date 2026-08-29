@@ -24,6 +24,8 @@ from astropy.coordinates import AltAz, EarthLocation, get_sun
 from astropy.time import Time, TimeDelta
 from numpy.typing import NDArray
 
+from pyskylumos import __version__
+
 if TYPE_CHECKING or __package__:
     from quantification.quantify_models import (
         CaptureConfig,
@@ -199,6 +201,116 @@ def choose_best_candidate(
             f"{minimum_saturation_fraction:.6f}."
         )
     return winner
+
+
+def erode_mask(mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+    """Erode a boolean mask with a 3x3 square, using only NumPy shifts.
+
+    Multiplicative sensor noise scatters isolated saturated pixels across a
+    whole frame.  Those survive a fractional-area test but not an erosion,
+    whereas a genuinely saturated region does.
+    """
+    eroded = mask.copy()
+    for row_shift in (-1, 0, 1):
+        for column_shift in (-1, 0, 1):
+            if row_shift == 0 and column_shift == 0:
+                continue
+            eroded &= np.roll(np.roll(mask, row_shift, axis=0), column_shift, axis=1)
+    return eroded
+
+
+def containment_statistics(
+    raw: FloatArray,
+    pixel_x: float,
+    pixel_y: float,
+    aperture_radius_pixels: int,
+    saturation_threshold: float,
+    *,
+    annulus_scale: float = 3.0,
+) -> tuple[float, float, float]:
+    """Measure how tightly the saturated region is confined to one aperture.
+
+    ``containment`` is ``1 - annulus / aperture``, where the annulus fraction is
+    measured on the eroded mask so that noise speckle does not count.
+
+    **This is reported, never enforced by default.** It does not separate a
+    genuine detection from a false one on real data: on the repository capture a
+    correct detection scores about 0.63, while a rendered frame whose Sun is
+    fully hidden — a known wrong answer — scores about 0.82.  The ordering is
+    inverted because the rendered Sun is compact while a real starburst carries a
+    broad flare halo that the CIE radiance model does not reproduce.  See
+    ``--minimum-containment`` and the quantification README before using it as a
+    gate on any instrument.
+
+    Args:
+        raw: The raw ADC-count frame.
+        pixel_x: Aperture centre column.
+        pixel_y: Aperture centre row.
+        aperture_radius_pixels: Aperture radius in pixels.
+        saturation_threshold: Count at or above which a pixel is saturated.
+        annulus_scale: Outer annulus radius as a multiple of the aperture radius.
+
+    Returns:
+        The aperture saturated fraction, the eroded annulus saturated fraction,
+        and the containment ratio clipped to ``[0, 1]``.
+    """
+    rows, columns = np.ogrid[: raw.shape[0], : raw.shape[1]]
+    squared = (columns - pixel_x) ** 2 + (rows - pixel_y) ** 2
+    inner = squared <= float(aperture_radius_pixels) ** 2
+    outer = (squared > float(aperture_radius_pixels) ** 2) & (
+        squared <= (annulus_scale * aperture_radius_pixels) ** 2
+    )
+    saturated = np.asarray(raw >= saturation_threshold)
+    contiguous = erode_mask(saturated)
+    aperture = float(np.mean(saturated[inner])) if np.any(inner) else 0.0
+    annulus = float(np.mean(contiguous[outer])) if np.any(outer) else 0.0
+    if aperture <= 0.0:
+        return aperture, annulus, 0.0
+    return aperture, annulus, float(np.clip(1.0 - annulus / aperture, 0.0, 1.0))
+
+
+def score_curve_statistics(
+    candidates: list[SunTimeCandidate], winner: SunTimeCandidate
+) -> dict[str, float]:
+    """Describe the shape of the score-versus-time curve around the winner.
+
+    A sharply peaked curve means the solar track crosses a small bright feature;
+    a broad one means the aperture is sliding across an extended saturated
+    region.  Reported for the same reason as ``containment_statistics`` and with
+    the same caveat: informative, but not a validated accept/reject test.
+
+    The peak-to-median ratio floors its denominator at one saturated pixel per
+    million so that the report stays finite and JSON-serializable when no
+    candidate outside the winner sees any saturation at all.
+
+    Returns:
+        The peak and median admissible saturated fraction, their ratio, the full
+        width in seconds over which the score stays at half the peak, and the
+        fraction of admissible candidates inside that width.
+    """
+    admissible = [candidate for candidate in candidates if candidate.admissible]
+    if not admissible:
+        return {
+            "peak_saturation_fraction": 0.0,
+            "median_saturation_fraction": 0.0,
+            "peak_to_median_ratio": 0.0,
+            "half_peak_width_seconds": 0.0,
+            "fraction_above_half_peak": 0.0,
+        }
+    scores = np.asarray(
+        [candidate.saturation_fraction for candidate in admissible], dtype=np.float64
+    )
+    seconds = np.asarray([candidate.unix_seconds for candidate in admissible], dtype=np.float64)
+    peak = float(winner.saturation_fraction)
+    above = seconds[scores >= 0.5 * peak]
+    median = float(np.median(scores))
+    return {
+        "peak_saturation_fraction": peak,
+        "median_saturation_fraction": median,
+        "peak_to_median_ratio": float(peak / max(median, 1.0e-6)),
+        "half_peak_width_seconds": float(above.max() - above.min()) if above.size else 0.0,
+        "fraction_above_half_peak": float(np.mean(scores >= 0.5 * peak)),
+    }
 
 
 def _candidate_times(center: Time, half_window_seconds: int, step_seconds: int) -> Time:
@@ -390,6 +502,7 @@ def run_calibration(
     fine_half_window_seconds: int,
     aperture_radius_pixels: int,
     minimum_saturation_fraction: float,
+    minimum_containment: float | None,
     run_fine_refinement: bool,
     write_config: bool,
     show: bool,
@@ -415,6 +528,21 @@ def run_calibration(
     )
     selected = choose_best_candidate(coarse, minimum_saturation_fraction)
     baseline = min(coarse, key=lambda candidate: abs(candidate.unix_seconds - float(center.unix)))
+
+    aperture_saturation, annulus_saturation, containment = containment_statistics(
+        raw,
+        selected.pixel_x,
+        selected.pixel_y,
+        aperture_radius_pixels,
+        config.saturation_threshold,
+    )
+    curve = score_curve_statistics(coarse, selected)
+    if minimum_containment is not None and containment < minimum_containment:
+        raise ValueError(
+            f"Winning detection containment {containment:.4f} is below the requested "
+            f"{minimum_containment:.4f}. This gate is opt-in and has no validated "
+            "threshold; see the quantification README before relying on it."
+        )
 
     fine: list[SunTimeCandidate] = []
     fine_winner: SunTimeCandidate | None = None
@@ -456,6 +584,7 @@ def run_calibration(
     report: dict[str, Any] = {
         "schema_version": 1,
         "generated_at_utc": datetime.now(UTC).isoformat(),
+        "pyskylumos_version": __version__,
         "method": "image_anchored_ephemeris_time_search",
         "config_path": str(config.config_path),
         "config_sha256_before": config_hash_before,
@@ -477,6 +606,15 @@ def run_calibration(
                 "earliest UTC",
             ],
         },
+        "detection_diagnostics": {
+            "aperture_saturation_fraction": aperture_saturation,
+            "annulus_saturation_fraction": annulus_saturation,
+            "annulus_scale": 3.0,
+            "containment": containment,
+            "minimum_containment_enforced": minimum_containment,
+            "is_validated_accept_reject_test": False,
+            **curve,
+        },
         "baseline": _candidate_record(baseline),
         "selected_minute": _candidate_record(selected),
         "fine_diagnostic_winner": (
@@ -495,6 +633,7 @@ def run_calibration(
             "calibration_uses_polarization_measurements": False,
             "calibration_estimates_camera_pose_or_lens_distortion": False,
             "minute_precision_is_authoritative": True,
+            "detection_diagnostics_are_reported_not_enforced": minimum_containment is None,
         },
     }
     with (resolved_output / "sun_time_calibration.json").open("w", encoding="utf-8") as stream:
@@ -582,6 +721,17 @@ def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
         help="Minimum credible saturated fraction in the winning aperture (default: 0.1).",
     )
     parser.add_argument(
+        "--minimum-containment",
+        type=_fraction,
+        default=None,
+        help=(
+            "Optional opt-in gate on the winning detection's containment. There is no "
+            "shipped default because the statistic is not a validated accept/reject test: "
+            "on the repository capture a correct detection scores 0.63 while a rendered "
+            "hidden-Sun frame scores 0.82. Reported unconditionally either way."
+        ),
+    )
+    parser.add_argument(
         "--skip-fine-refinement",
         action="store_true",
         help="Skip the diagnostic one-second search around the winning minute.",
@@ -612,6 +762,7 @@ def main(arguments: list[str] | None = None) -> int:
         fine_half_window_seconds=options.fine_half_window_seconds,
         aperture_radius_pixels=options.aperture_radius_pixels,
         minimum_saturation_fraction=options.minimum_saturation_fraction,
+        minimum_containment=options.minimum_containment,
         run_fine_refinement=not options.skip_fine_refinement,
         write_config=options.write_config,
         show=options.show,

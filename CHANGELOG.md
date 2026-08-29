@@ -8,6 +8,39 @@ Section numbers referenced below point into the
 [mathematical reference](README.md#mathematical-reference), where every formula change is
 attributed to its source.
 
+## [0.1.2] — 2026-08-29
+
+The importable package is unchanged again; this release touches only the repository-local
+capture workflow. It adds detection diagnostics to the image-anchored time calibration and
+records, as a measurement rather than a claim, that the containment statistic those diagnostics
+expose is **not** a valid accept/reject test on real data.
+
+### Added
+
+- `detection_diagnostics` in `sun_time_calibration.json`: the winning detection's aperture and
+  eroded-annulus saturated fractions, their containment ratio, and the shape of the
+  score-versus-time curve (peak, median, peak-to-median ratio, half-peak width, fraction above
+  half peak). Reported unconditionally; never enforced.
+- `calibrate_sun_time.py --minimum-containment`, an **opt-in** gate with no default. It exists
+  for an instrument where a threshold has been established from real failure captures.
+- `measure_real_capture_containment` in
+  [`quantification/validate_time_recovery.py`](quantification/validate_time_recovery.py), the
+  control the synthetic sweeps cannot supply. `time_recovery.json` now carries
+  `real_capture_control` and a `transfers_to_real_capture` verdict beside the guard scorecard.
+
+### Changed
+
+- `erode_mask` and `containment_statistics` moved from `validate_time_recovery.py` into
+  `calibrate_sun_time.py`, and the validation script imports them. The characterized code is
+  now literally the shipped code, as the search already was.
+- **The containment guard is documented as not shipping, and why.** On rendered frames it
+  catches 5 of 6 image-detectable silent failures for one false rejection in 47. On the
+  repository capture a *correct* detection scores 0.626, below every rendered hidden-Sun
+  failure at 0.816–0.828, so the ordering is inverted and no threshold separates them. The
+  cause is the renderer: a CIE radiance peak carries no lens flare, glare or blooming, so its
+  starburst is far more compact than the instrument's. See
+  [the quantification README](quantification/README.md#why-there-is-no-shipped-containment-guard).
+
 ## [0.1.1] — 2026-08-25
 
 No behaviour changed in the importable package. Every module in the wheel is byte-identical to

@@ -211,7 +211,7 @@ def test_rayleigh_neutralities_are_nan_and_singular_grid_is_warning_free():
 
 
 def test_public_version_and_exception_exports_exist():
-    assert pyskylumos.__version__ == "0.1.1"
+    assert pyskylumos.__version__ == "0.1.2"
     assert issubclass(ConfigurationError, ValueError)
     assert issubclass(InputValidationError, ValueError)
     assert issubclass(InputTypeError, TypeError)

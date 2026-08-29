@@ -208,15 +208,45 @@ median absolute error is 60 s, but the maximum is 2580 s: 14.5% of accepted reco
 is worse than a refusal, so the script measures them separately rather than folding them into a
 mean.
 
-Two mechanisms explain and partly contain that. The **containment guard** scores how tightly
-the saturated region is confined to one aperture — a genuine starburst is compact, whereas an
-over-exposed or Sun-hidden frame saturates broadly — and catches 5 of the 6 image-detectable
-silent failures at a cost of one false rejection in 47 correct recoveries. **Pose aliasing** is
-the residual case it cannot catch: a yaw error rotates the projected Sun, and the search
-absorbs that by sliding along the solar track, producing a compact and entirely wrong
-detection. The fitted exchange rate is 189 s per degree, so 0.32° of yaw error buys a full
-minute of apparent time. That number is why the manifest treats minute precision as
-authoritative and records the one-second refinement as a diagnostic only.
+**Pose aliasing** explains the largest class of them. A yaw error rotates the projected Sun,
+and the search absorbs that by sliding along the solar track, producing a compact and entirely
+wrong detection. The fitted exchange rate is 189 s per degree at R² = 0.998, so 0.32° of yaw
+error buys a full minute of apparent time. No single-frame image statistic can detect this: the
+detection is genuine, the pose is not. That number is why the manifest treats minute precision
+as authoritative and records the one-second refinement as a diagnostic only.
+
+### Why there is no shipped containment guard
+
+The remaining silent failures — over-exposed frames, and frames whose Sun is hidden so that
+auto-exposure renormalizes onto diffuse bright sky — look separable on rendered frames. The
+**containment** statistic, `1 - eroded annulus saturated fraction / aperture saturated
+fraction`, catches 5 of the 6 image-detectable cases across the sweeps at a cost of one false
+rejection in 47, and on that evidence alone it would ship as an admissibility test.
+
+**It does not transfer to the instrument, and the script measures that rather than assuming
+it.** `measure_real_capture_containment` scores the real capture on the same axis as the
+rendered frames and records the result next to the scorecard as `real_capture_control`, with
+`transfers_to_real_capture` recording the verdict:
+
+| Frame | Containment | Truth |
+|---|---|---|
+| Repository capture, r = 45 px | **0.626** | correct detection |
+| Rendered clear sky | 1.000 | correct detection |
+| Rendered Sun fully hidden | 0.816–0.828 | wrong by ~29 minutes |
+| Rendered exposure 0.50 | 0.381 | wrong by 43 minutes |
+
+The real correct detection scores *below* every rendered hidden-Sun failure, so the ordering is
+inverted and no threshold on this statistic separates the two. The cause is the renderer: a CIE
+radiance peak has no lens flare, glare or blooming, so its starburst is compact — saturated
+fraction falls from 1.00 at r = 15 px to 0.03 at r = 180 px — whereas the instrument's falls
+only from 0.71 to 0.24 over the same span, a profile nearly identical in shape to the rendered
+hidden-Sun failure.
+
+`calibrate_sun_time.py` therefore **reports** containment and the score-curve shape in
+`sun_time_calibration.json` under `detection_diagnostics` and enforces neither. The opt-in
+`--minimum-containment` gate exists for an instrument where a threshold has been established,
+and deliberately ships with no default. Establishing one needs real captures of the failure
+cases, or a renderer that reproduces flare — neither of which this repository has.
 
 ## Outputs
 
@@ -230,7 +260,7 @@ The entire output folder is gitignored.
 | `cie_selection.png` | Affine intensity NRMSE for CIE types 1–15 and the selected type |
 | `<model>_residuals.png` | Measured, simulated and residual DOP/AOP fields plus one representative raw analyzer sub-grid for a model |
 | `sun_time_search.csv` | Every coarse and diagnostic fine UTC candidate and its image score |
-| `sun_time_calibration.json` | Search settings, checksums, baseline and selected projections, displacement and diagnostic refinement |
+| `sun_time_calibration.json` | Search settings, checksums, baseline and selected projections, displacement, diagnostic refinement, and the reported-only `detection_diagnostics` (containment and score-curve shape) |
 | `sun_time_calibration.png` | Raw-image solar track, apertures and score-versus-time plot |
 | `sensitivity.csv` | One row per model and swept setting: both ranks, the DOP and AOP metrics and the combined score |
 | `sensitivity.json` | Sweep settings, baseline ranks, rank-change count, CIE type per setting, and both bootstrap regimes with intervals and paired model comparisons |
@@ -238,7 +268,7 @@ The entire output folder is gitignored.
 | `bootstrap_scores.png` | Bootstrap score intervals per model, as published and on the tighter field |
 | `time_recovery_trials.csv` | Every closed-loop trial: render settings, recovered time, time and angular errors, and guard statistics |
 | `time_recovery_summary.csv` | Per-sweep aggregate: failure rate, median and maximum time error, plateau width and silent-failure rate |
-| `time_recovery.json` | Search and rendering settings, declared assumptions, totals, the containment-guard scorecard and the pose-aliasing fit |
+| `time_recovery.json` | Search and rendering settings, declared assumptions, totals, the containment scorecard with its real-capture control and `transfers_to_real_capture` verdict, and the pose-aliasing fit |
 | `time_recovery.png` | Six-panel characterization: solar elevation, aperture radius, exposure, pose aliasing, occlusion outcomes and the containment guard |
 
 ## Interpretation limits

@@ -37,6 +37,7 @@ if TYPE_CHECKING or __package__:
         SunTimeCandidate,
         _candidate_times,
         choose_best_candidate,
+        containment_statistics,
         evaluate_candidate_times,
         format_time_utc,
         project_altaz_to_sensor,
@@ -47,12 +48,14 @@ if TYPE_CHECKING or __package__:
         _build_engine,
         analyzer_response,
         load_config,
+        load_tiff,
     )
 else:  # Direct ``python quantification/validate_time_recovery.py`` invocation.
     from calibrate_sun_time import (  # type: ignore[import-not-found]
         SunTimeCandidate,
         _candidate_times,
         choose_best_candidate,
+        containment_statistics,
         evaluate_candidate_times,
         format_time_utc,
         project_altaz_to_sensor,
@@ -63,6 +66,7 @@ else:  # Direct ``python quantification/validate_time_recovery.py`` invocation.
         _build_engine,
         analyzer_response,
         load_config,
+        load_tiff,
     )
 
 type FloatArray = NDArray[np.float64]
@@ -275,66 +279,6 @@ def render_raw_counts(
     )
     counts = np.asarray(chip.get_bits_intensity(intensity[None, :, :])[0], dtype=np.float64)
     return counts, sun_azimuth, sun_altitude
-
-
-def erode_mask(mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
-    """Erode a boolean mask with a 3x3 square, using only NumPy shifts.
-
-    Multiplicative sensor noise scatters isolated saturated pixels across the
-    whole frame.  Those survive a fractional-area test but not an erosion,
-    whereas a genuinely saturated region does.  Eroding before measuring the
-    annulus is what separates speckle from a diffuse over-exposed patch.
-    """
-    eroded = mask.copy()
-    for row_shift in (-1, 0, 1):
-        for column_shift in (-1, 0, 1):
-            if row_shift == 0 and column_shift == 0:
-                continue
-            eroded &= np.roll(np.roll(mask, row_shift, axis=0), column_shift, axis=1)
-    return eroded
-
-
-def containment_statistics(
-    counts: FloatArray,
-    pixel_x: float,
-    pixel_y: float,
-    aperture_radius_pixels: int,
-    saturation_threshold: float,
-    *,
-    annulus_scale: float = 3.0,
-) -> tuple[float, float, float]:
-    """Measure how well the saturated region is confined to one aperture.
-
-    A genuine solar starburst is compact: it fills the aperture and stops.  An
-    over-exposed frame, or a frame whose Sun is hidden so that auto-exposure
-    renormalizes onto diffuse bright sky, saturates well beyond the aperture.
-    Containment separates the two without needing an absolute brightness scale.
-
-    Args:
-        counts: The ADC-count frame.
-        pixel_x: Aperture centre column.
-        pixel_y: Aperture centre row.
-        aperture_radius_pixels: Aperture radius in pixels.
-        saturation_threshold: Count at or above which a pixel is saturated.
-        annulus_scale: Outer annulus radius as a multiple of the aperture radius.
-
-    Returns:
-        The aperture saturated fraction, the eroded annulus saturated fraction,
-        and ``1 - annulus / aperture`` clipped to ``[0, 1]``.
-    """
-    rows, columns = np.ogrid[: counts.shape[0], : counts.shape[1]]
-    squared = (columns - pixel_x) ** 2 + (rows - pixel_y) ** 2
-    inner = squared <= float(aperture_radius_pixels) ** 2
-    outer = (squared > float(aperture_radius_pixels) ** 2) & (
-        squared <= (annulus_scale * aperture_radius_pixels) ** 2
-    )
-    saturated = np.asarray(counts >= saturation_threshold)
-    contiguous = erode_mask(saturated)
-    aperture = float(np.mean(saturated[inner])) if np.any(inner) else 0.0
-    annulus = float(np.mean(contiguous[outer])) if np.any(outer) else 0.0
-    if aperture <= 0.0:
-        return aperture, annulus, 0.0
-    return aperture, annulus, float(np.clip(1.0 - annulus / aperture, 0.0, 1.0))
 
 
 def _plateau_width_seconds(
@@ -676,13 +620,61 @@ def _summarize(trials: list[RecoveryTrial]) -> list[dict[str, Any]]:
     return summary
 
 
-def _guard_report(trials: list[RecoveryTrial]) -> dict[str, Any]:
-    """Score the containment guard as a detector of silent recovery failures.
+def measure_real_capture_containment(
+    config: CaptureConfig,
+    *,
+    aperture_radius_pixels: int = DEFAULT_APERTURE_RADIUS_PIXELS,
+    minimum_saturation_fraction: float = DEFAULT_MINIMUM_SATURATION_FRACTION,
+) -> dict[str, Any]:
+    """Score the real capture with the same statistic used on rendered frames.
 
-    A yaw error produces a genuine, compact detection of the real Sun whose
-    inferred time is nevertheless wrong; no single-frame image statistic can
-    detect it, so those trials are counted separately rather than held against
-    the guard.
+    This is the control the synthetic sweeps cannot provide.  The rendered Sun
+    is a CIE radiance peak with no lens flare, glare or blooming, so its
+    starburst is far more compact than the instrument's.  Measuring the real
+    capture on the same axis is what shows whether a threshold fitted to
+    rendered frames means anything on real data.
+    """
+    raw = load_tiff(config.input_dir / config.raw_file, (config.image_height, config.image_width))
+    candidates = evaluate_candidate_times(
+        config,
+        raw,
+        _candidate_times(
+            Time(config.time_utc, scale="utc"),
+            DEFAULT_HALF_WINDOW_SECONDS,
+            DEFAULT_COARSE_STEP_SECONDS,
+        ),
+        stage="coarse",
+        aperture_radius_pixels=aperture_radius_pixels,
+    )
+    winner = choose_best_candidate(candidates, minimum_saturation_fraction)
+    aperture, annulus, containment = containment_statistics(
+        raw,
+        winner.pixel_x,
+        winner.pixel_y,
+        aperture_radius_pixels,
+        config.saturation_threshold,
+    )
+    return {
+        "time_utc": winner.time_utc,
+        "aperture_radius_pixels": aperture_radius_pixels,
+        "aperture_saturation_fraction": aperture,
+        "annulus_saturation_fraction": annulus,
+        "containment": containment,
+        "passes_synthetic_threshold": containment >= DEFAULT_CONTAINMENT_THRESHOLD,
+    }
+
+
+def _guard_report(
+    trials: list[RecoveryTrial], real_capture: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Score the containment guard, then test whether it transfers to real data.
+
+    Two limits bound what this scorecard means.  A yaw error produces a genuine,
+    compact detection of the real Sun whose inferred time is nevertheless wrong;
+    no single-frame image statistic can detect it, so those trials are counted
+    separately rather than held against the guard.  More importantly the whole
+    scorecard is computed on rendered frames, and ``real_capture`` records what
+    the same statistic does on the instrument.
     """
     accepted = [trial for trial in trials if trial.succeeded]
     silent = [
@@ -715,6 +707,19 @@ def _guard_report(trials: list[RecoveryTrial]) -> dict[str, Any]:
             else float("nan")
         ),
         "pose_aliased_silent_failures": len(silent) - len(detectable),
+        "real_capture_control": real_capture,
+        # The scorecard above is fitted to rendered frames. If the real capture's
+        # correct detection scores below the worst rendered failure, no threshold
+        # on this statistic can separate the two, and the guard must not ship as
+        # an accept/reject test.
+        "transfers_to_real_capture": (
+            bool(
+                real_capture is not None
+                and detectable
+                and real_capture["containment"]
+                > max(trial.winner_containment for trial in detectable)
+            )
+        ),
     }
 
 
@@ -920,6 +925,23 @@ def run_validation(
                 flush=True,
             )
 
+    # The control: the same statistic measured on the instrument rather than on a
+    # rendered frame. Absent inputs must not fail the sweep, which needs no capture.
+    real_capture: dict[str, Any] | None
+    try:
+        real_capture = measure_real_capture_containment(config)
+    except (FileNotFoundError, ValueError, RuntimeError) as error:
+        real_capture = None
+        if verbose:
+            print(f"real-capture control unavailable: {error}", flush=True)
+    else:
+        if verbose:
+            print(
+                f"real-capture control: containment {real_capture['containment']:.4f} "
+                f"at {real_capture['time_utc']}",
+                flush=True,
+            )
+
     summary = _summarize(trials)
     fieldnames = list(asdict(trials[0]).keys())
     with (output_dir / "time_recovery_trials.csv").open("w", newline="") as stream:
@@ -996,7 +1018,7 @@ def run_validation(
             ),
             "silent_failure_threshold_seconds": SILENT_FAILURE_SECONDS,
         },
-        "containment_guard": _guard_report(trials),
+        "containment_guard": _guard_report(trials, real_capture),
         "pose_aliasing": _yaw_alias_fit(trials),
         "summary": summary,
         "trials": [asdict(trial) for trial in trials],

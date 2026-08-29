@@ -18,10 +18,13 @@ from quantification.calibrate_sun_time import (
     SunTimeCandidate,
     _score_aperture,
     choose_best_candidate,
+    containment_statistics,
+    erode_mask,
     main,
     parse_arguments,
     project_altaz_to_sensor,
     replace_capture_time_text,
+    score_curve_statistics,
     write_capture_time,
 )
 from quantification.quantify_models import CaptureConfig, _build_engine, load_config
@@ -86,7 +89,7 @@ def _candidate(
     )
 
 
-def _write_synthetic_capture(tmp_path: Path) -> tuple[Path, str]:
+def _write_synthetic_capture(tmp_path: Path, *, sun_radius_pixels: float = 3.0) -> tuple[Path, str]:
     height = width = 256
     target_time = "2025-09-22T12:00:00"
     manifest_time = "2025-09-22T12:02:00"
@@ -103,7 +106,7 @@ def _write_synthetic_capture(tmp_path: Path) -> tuple[Path, str]:
 
     rows, columns = np.ogrid[:height, :width]
     raw = np.full((height, width), 1000, dtype=np.uint16)
-    raw[(columns - target_x) ** 2 + (rows - target_y) ** 2 <= 3.0**2] = 4090
+    raw[(columns - target_x) ** 2 + (rows - target_y) ** 2 <= sun_radius_pixels**2] = 4090
     raw[(columns - 20.0) ** 2 + (rows - 20.0) ** 2 <= 6.0**2] = 4095
     files = {
         "raw.tif": raw,
@@ -284,6 +287,14 @@ def test_synthetic_cli_dry_run_and_manifest_update(
     assert write_report["config_updated"]
     assert write_report["manifest_time_written_utc"] == target_time
 
+    # Diagnostics are reported unconditionally and never gate by default.
+    diagnostics = dry_report["detection_diagnostics"]
+    assert diagnostics["minimum_containment_enforced"] is None
+    assert diagnostics["is_validated_accept_reject_test"] is False
+    assert 0.0 <= diagnostics["containment"] <= 1.0
+    assert diagnostics["peak_saturation_fraction"] >= 0.5
+    assert dry_report["assumptions"]["detection_diagnostics_are_reported_not_enforced"]
+
 
 def test_checksum_and_argument_failures(tmp_path: Path) -> None:
     manifest, _ = _write_synthetic_capture(tmp_path)
@@ -306,3 +317,95 @@ def test_checksum_and_argument_failures(tmp_path: Path) -> None:
         parse_arguments(["--minimum-saturation-fraction", "1.1"])
     with pytest.raises(SystemExit):
         parse_arguments(["--search-half-window-hours", "nan"])
+
+
+def _saturated_disc(shape: tuple[int, int], centre_x: float, centre_y: float, radius: float):
+    rows, columns = np.ogrid[: shape[0], : shape[1]]
+    inside = (columns - centre_x) ** 2 + (rows - centre_y) ** 2 <= radius**2
+    return np.where(inside, 4095.0, 100.0).astype(np.float64)
+
+
+def test_erosion_removes_speckle_but_keeps_a_solid_region() -> None:
+    generator = np.random.default_rng(0)
+    speckle = generator.random((64, 64)) < 0.2
+    assert speckle.any()
+    assert not erode_mask(speckle).any()
+
+    solid = np.zeros((64, 64), dtype=np.bool_)
+    solid[16:48, 16:48] = True
+    eroded = erode_mask(solid)
+    assert eroded.sum() == 30 * 30
+
+
+def test_containment_separates_a_compact_core_from_a_broad_field() -> None:
+    shape = (256, 256)
+    compact = _saturated_disc(shape, 128.0, 128.0, 20.0)
+    _, compact_annulus, compact_containment = containment_statistics(
+        compact, 128.0, 128.0, 30, 4090.0
+    )
+    assert compact_annulus == 0.0
+    assert compact_containment == pytest.approx(1.0)
+
+    broad = _saturated_disc(shape, 128.0, 128.0, 110.0)
+    _, broad_annulus, broad_containment = containment_statistics(broad, 128.0, 128.0, 30, 4090.0)
+    assert broad_annulus > 0.5
+    assert broad_containment < 0.5
+
+    # An aperture centred on empty sky has no saturated pixels to contain.
+    dark = np.full(shape, 100.0, dtype=np.float64)
+    aperture, annulus, containment = containment_statistics(dark, 128.0, 128.0, 30, 4090.0)
+    assert aperture == annulus == containment == 0.0
+
+
+def test_score_curve_statistics_describe_the_peak_and_stay_finite() -> None:
+    peaked = [
+        _candidate("2025-09-22T15:00:00", 0.0, 0.02, 1000.0),
+        _candidate("2025-09-22T15:01:00", 1.0, 0.80, 4000.0),
+        _candidate("2025-09-22T15:02:00", 2.0, 0.02, 1000.0),
+    ]
+    statistics = score_curve_statistics(peaked, peaked[1])
+    assert statistics["peak_saturation_fraction"] == pytest.approx(0.80)
+    assert statistics["fraction_above_half_peak"] == pytest.approx(1.0 / 3.0)
+    assert statistics["half_peak_width_seconds"] == 0.0
+
+    # A median of zero must not produce a non-serializable infinity.
+    flat = [_candidate("2025-09-22T15:00:00", 0.0, 0.0, 0.0) for _ in range(3)]
+    flat = [*flat, _candidate("2025-09-22T15:03:00", 3.0, 0.5, 4000.0)]
+    finite = score_curve_statistics(flat, flat[-1])
+    assert np.isfinite(finite["peak_to_median_ratio"])
+
+    assert score_curve_statistics([], peaked[1])["peak_saturation_fraction"] == 0.0
+
+
+def test_containment_gate_is_opt_in_and_rejects_a_broad_saturated_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A saturated region far wider than the aperture is what an over-exposed or
+    # Sun-hidden frame looks like: the annulus saturates with the aperture.
+    manifest, _ = _write_synthetic_capture(tmp_path, sun_radius_pixels=40.0)
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    arguments = [
+        "--config",
+        str(manifest),
+        "--search-half-window-hours",
+        "0.05",
+        "--coarse-step-seconds",
+        "60",
+        "--aperture-radius-pixels",
+        "2",
+        "--minimum-saturation-fraction",
+        "0.5",
+        "--skip-fine-refinement",
+        "--output-dir",
+        str(tmp_path / "output"),
+    ]
+
+    # Default: reported, never enforced, so a broad field still calibrates.
+    assert main(arguments) == 0
+    report = json.loads((tmp_path / "output" / "sun_time_calibration.json").read_text("utf-8"))
+    assert report["detection_diagnostics"]["containment"] < 0.5
+    assert report["detection_diagnostics"]["minimum_containment_enforced"] is None
+
+    with pytest.raises(ValueError, match="below the requested"):
+        main([*arguments, "--minimum-containment", "0.9"])
